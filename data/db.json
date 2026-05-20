@@ -1,0 +1,14 @@
+{
+  "tracks": [
+    {
+      "title": "Morning Drive",
+      "artist": "Алексей Иванов",
+      "bpm": 120,
+      "genre": "electronic",
+      "territory": "Worldwide",
+      "id": "track_0001",
+      "created_at": "2026-05-15T14:19:34.245640"
+    }
+  ],
+  "deals": []
+}

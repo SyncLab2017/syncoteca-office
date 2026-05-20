@@ -1,0 +1,898 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.message.voice.file_id }}",
+        "additionalFields": {}
+      },
+      "id": "d31b7e92-7304-440a-bf59-18266d3ae3c8",
+      "name": "Download File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        320,
+        480
+      ],
+      "webhookId": "407f7cf9-5f24-4ab5-9c0a-2e800790d111",
+      "credentials": {
+        "telegramApi": {
+          "id": "q04N1ar5giFKi8f7",
+          "name": "Telegram account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "options": {}
+      },
+      "id": "ede03ba4-16d7-4d0d-af59-a77b9c9f580a",
+      "name": "Transcribe",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.6,
+      "position": [
+        544,
+        480
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "FFqWvQXagIh7SZ1a",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "02ca4904-7789-4b13-8e2e-14db226dc5cb",
+      "name": "Telegram Trigger1",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -128,
+        688
+      ],
+      "webhookId": "6cc301a5-3daf-48b0-b413-003ced5c8af7",
+      "credentials": {
+        "telegramApi": {
+          "id": "q04N1ar5giFKi8f7",
+          "name": "Telegram account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fe7ecc99-e1e8-4a5e-bdd6-6fce9757b234",
+              "name": "text",
+              "value": "={{ $json.message.text || $json.message.caption }}",
+              "type": "string"
+            },
+            {
+              "id": "8386c97a-d1b9-4000-9e17-86c2158e91af",
+              "name": "session_id",
+              "value": "=user_{{ $json.message.from.id }}",
+              "type": "string"
+            },
+            {
+              "id": "877d9358-6785-4299-be83-7c78fd41924f",
+              "name": "user_id",
+              "value": "={{ $json.message.from.id }}",
+              "type": "string"
+            },
+            {
+              "id": "c58ae87e-c307-4af6-945f-bb8350aafc3d",
+              "name": "username",
+              "value": "={{ $json.message.from.username }}",
+              "type": "string"
+            },
+            {
+              "id": "a44439db-9b02-4093-9cc9-19af6c9e1a3c",
+              "name": "first_name",
+              "value": "={{ $json.message.from.first_name }}",
+              "type": "string"
+            },
+            {
+              "id": "d65b621c-b717-408d-b88c-20690ebb9b90",
+              "name": "update",
+              "value": "={{ $('Telegram Trigger1').item.json }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "f4ccaa08-e5ab-4a98-a046-86d5644211a6",
+      "name": "Set Final Text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        768,
+        672
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "request_logs",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "first_name",
+              "fieldValue": "={{ $node[\"Merge\"].json.first_name }}"
+            },
+            {
+              "fieldId": "session_id",
+              "fieldValue": "={{ $('Prepare AI Input').item.json.session_id }}"
+            },
+            {
+              "fieldId": "request_text",
+              "fieldValue": "={{ $node[\"Merge\"].json.text }}"
+            },
+            {
+              "fieldId": "telegram_update_json",
+              "fieldValue": "={{ JSON.stringify($node[\"Telegram Trigger1\"].json) }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        576
+      ],
+      "id": "ab329f55-aa8f-4437-9b80-b509cdc73be8",
+      "name": "Log Request to Supabase",
+      "credentials": {
+        "supabaseApi": {
+          "id": "dfzsLjnrg85St359",
+          "name": "Supabase Admin"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1664,
+        800
+      ],
+      "id": "0c13f2d9-d794-4284-ab84-ee2b6312fe3c",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "FFqWvQXagIh7SZ1a",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $node[\"Telegram Trigger1\"].json.message.chat.id }}",
+        "text": "={{ $json.raw_output }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_notification": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2576,
+        672
+      ],
+      "id": "128c163d-578c-4029-9386-16151a69f9ac",
+      "name": "Send a text message",
+      "webhookId": "22a07840-fea9-49c1-98e3-47998506b188",
+      "credentials": {
+        "telegramApi": {
+          "id": "q04N1ar5giFKi8f7",
+          "name": "Telegram account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.session_id }}",
+        "tableName": "conversation_history",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1792,
+        800
+      ],
+      "id": "556a709c-ca6c-42be-9996-fe7bbcd797de",
+      "name": "Postgres Chat Memory",
+      "credentials": {
+        "postgres": {
+          "id": "KVj8Z4Fo7n4EhNNX",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "query": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Query', ``, 'string') }}",
+        "options": {}
+      },
+      "type": "@tavily/n8n-nodes-tavily.tavilyTool",
+      "typeVersion": 1,
+      "position": [
+        1920,
+        800
+      ],
+      "id": "4f9600b7-8076-428f-8ed6-d52fc4a14d52",
+      "name": "Search in Tavily",
+      "credentials": {
+        "tavilyApi": {
+          "id": "rgR8gVkUmuujDJdX",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=### БЛОК 1: РОЛЬ И ГЛАВНЫЕ ПРАВИЛА\n\nТы — профессиональный и дружелюбный ассистент по формулировке лицензионных запросов на использование музыки. Общайся на «ты».\n\nТвоя задача — за минимальное число вопросов собрать у пользователя всю необходимую информацию и подготовить письмо-запрос, а затем задачу для Asana. Ты работаешь в строгом пошаговом режиме.\n\n**ПРАВИЛО СБРОСА:** Если пользователь говорит «новый запрос» — игнорируй всю предыдущую историю и начни диалог с нуля.\n\n**ПРАВИЛО ФИНАЛИЗАЦИИ:** ЗАПРЕЩЕНО возвращать `action: \"save_to_asana\"` до тех пор, пока пользователь не даст на это явную команду («добавь в Асану», «сохраняй»).\n\n---\n\n### БЛОК 2: АЛГОРИТМ РАБОТЫ\n\n**ШАГ 1: АНАЛИЗ КОНТЕКСТА.**\nПроанализируй историю диалога и выяви, что уже известно. Никогда не задавай вопрос повторно, если ответ уже был дан.\n\n**ШАГ 2: ОПРЕДЕЛЕНИЕ ТИПА ПРОЕКТА.**\nОпредели тип из контекста первого сообщения:\n- Если очевидно, что речь про рекламу или трейлер — работай по сценарию **РЕКЛАМА/ТРЕЙЛЕР**.\n- Если очевидно, что это сериал, кино или документальный фильм — работай по сценарию **СЕРИАЛ/КИНО**.\n- Если тип **не очевиден** — задай один вопрос: «Это для рекламного ролика / трейлера или для сериала / кино / документального фильма?»\n\nНе угадывай по отдельным словам. Один точный вопрос лучше, чем неверный путь.\n\n**ШАГ 3: ПОСЛЕДОВАТЕЛЬНЫЙ СБОР ИНФОРМАЦИИ.**\nЕсли для составления письма не хватает деталей — задавай **по одному** уточняющему вопросу за раз. Не забрасывай пользователя списком вопросов.\n\n**Для СЕРИАЛ / КИНО / ДОКУМЕНТАЛЬНЫЙ ФИЛЬМ:**\n- Название песни и исполнитель\n- Как используется в проекте: однократно или многократно\n- Звучит ли на начальных или финальных титрах\n- Описание сцены или ссылка на неё\n- Хронометраж использования\n- Синопсис проекта\n- Планируется ли использование в анонсах и трейлерах\n- Нужно ли использование in-context\n\n**Для РЕКЛАМА / ТРЕЙЛЕР:**\n- Количество роликов и их хронометраж (основной + монтажные версии)\n- Описание проекта и контекст использования\n- Описание бренда\n- Оригинальная песня или будет переработка (изменение текста / музыки)\n- Территория распространения\n- Сроки рекламной кампании\n- Медиаканалы: ТВ, интернет, радио, публичные места\n\n**Если нужна информация о бренде или проекте** — предложи поискать в интернете через Tavily и сделай это.\n\n**ШАГ 4: ГЕНЕРАЦИЯ ПРОЕКТА ЗАДАЧИ.**\nТолько когда вся необходимая информация собрана — сформируй финальный текст письма строго по шаблонам из Блока 4. Верни его в поле `reply_text` с action `draft_ready`.\n\n**ШАГ 5: ОЖИДАНИЕ И ПРАВКИ.**\nПосле отправки проекта жди реакции пользователя:\n- Если он присылает **правки** — обнови текст и верни новый проект через `draft_ready`.\n- Если даёт **явную команду сохранить** («добавь в Асану», «сохраняй») — верни `save_to_asana` с полным текстом в `full_text`.\n\n---\n\n### БЛОК 3: ФОРМАТ ОТВЕТА — СТРОГО СОБЛЮДАТЬ\n\nТы ВСЕГДА возвращаешь только валидный JSON. Никакого текста до или после.\n\nЕсли задаёшь вопрос или продолжаешь диалог:\n{\"action\": \"continue_dialogue\", \"reply_text\": \"твой ответ пользователю\"}\n\nЕсли готов показать проект задачи:\n{\"action\": \"draft_ready\", \"reply_text\": \"ПРОЕКТ ЗАДАЧИ: ...\\n\\nДобрый день,\\n...\"}\n\nЕсли пользователь дал явную команду сохранить:\n{\"action\": \"save_to_asana\", \"full_text\": \"ПРОЕКТ ЗАДАЧИ: ...\\n\\nДобрый день,\\n...\"}\n\n---\n\n### БЛОК 4: СЛОВАРЬ И ШАБЛОНЫ ПИСЕМ\n\n**Словарь медиаканалов:**\n- ТВ = Телевидение = Телик = Эфирное вещание → всегда пиши **ТВ**\n- Интернет = Диджитал = Digital = OLV = онлайн-кинотеатры, соцсети (Telegram, VK, Instagram, YouTube и т.п.) → пиши **Интернет**\n- Публичные места = публичка, точки продаж (POV), стадионы и т.д. → пиши **Публичные места**\n- Радио = Аудиоролик → пиши **Радио**\n\n**Важно:** Если медиа — ТВ и Интернет на территорию РФ, то:\n- ТВ → территория **Россия**\n- Интернет → территория **Мир**\nВсегда прописывай это явно.\n\n---\n\n**Структура письма — всегда оформляй блоками:**\n\n- Название песни и исполнитель\n- Описание проекта / бренда\n- Условия лицензии:\n  - Хронометраж и количество роликов\n  - Территория\n  - Срок\n  - Медиа\n\nВсе блоки должны быть визуально разделены.\n\n---\n\n**ШАБЛОН 1 — Сериал / Кино / Документальный фильм:**\n\nПроект задачи: «Название проекта | Исполнитель — Название песни»\n\nДобрый день,\n\nК нам поступил потенциальный запрос на использование песни\n\n«Звенит январская вьюга» в исполнении Нины Бродской\n\nв сериале «Знахарь».\nКоличество серий в сезоне: 17\nДата релиза: 2025 год\n\n📄 Описание проекта: Водитель скорой помощи Костя привык жить одним днём. Погрязнув в долгах и кредитах, он не придумал ничего лучше, чем сесть в первый попавшийся автобус и уехать подальше от Москвы и своих проблем.\n\n⭐️ Режиссёр / Сценарист: Константин Богомолов\n🎭 Актёрский состав: Дарья Мороз, Мария Фомина, Софья Эрнст, Ольга Сутулова, Сергей Бурунов, Марина Зудина\n\n🎞️ Описание сцены:\nГерои летят на воздушном шаре, и вдруг обрывается привязной канат — они в панике зовут на помощь.\n\n⏱️ Хронометраж сцены: не более 60 секунд.\n❔ Использование однократное. На титрах и в промороликах не используется.\n\n🌎 Территория: Мир\n⏳ Срок: На весь срок охраны авторского права\n📺 Медиа: Все медиа\n\n💰 Просим сообщить о возможности лицензирования указанного произведения в составе проекта и сориентировать по прогнозу стоимости лицензии.\n\n---\n\n**ШАБЛОН 2 — Реклама / Трейлер:**\n\nПроект задачи: «Название бренда | Исполнитель — Название песни»\n\n\n«Звенит январская вьюга» с целью создания аранжировки и дальнейшего её использования в рекламном ролике Альфастрахования.\n\nИнформация о бренде / проекте:\n\n🎞️ Описание ролика:\nСчастливая семья едет в машине и напевает песню.\n\n⏱️ Хронометраж основного ролика: 30 секунд, монтажные версии: 20 / 10 / 6 секунд\n\nУсловия лицензирования:\n\n🌎 Территория: Беларусь, Кыргызстан\n⏳ Срок: 6 месяцев\n📺 Медиа: ТВ, Интернет, Радио, Публичные места\n\n\n---\n\nПоследнее сообщение от пользователя: {{ $json.request_text }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        1728,
+        576
+      ],
+      "id": "508eb375-70c5-423f-8faf-66227021b0c2",
+      "name": "AI Agent (RU Промпт)"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.voice.file_id }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    },
+                    "id": "fb7d012c-71f8-4325-8003-a17b735f6801"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "voice"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "11f45c94-8b57-43fc-89cb-3dd2c69f51ff",
+                    "leftValue": "={{ $json.message.text }}",
+                    "rightValue": "Exists",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Text"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "626cff5f-6493-4f3d-bbfd-39a8e758b372",
+                    "leftValue": "={{ $json.message.caption }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Caption"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        96,
+        560
+      ],
+      "id": "1e7c9298-f587-4ea3-a6d9-b96cd926921d",
+      "name": "Check Voice/Text"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dda35573-c68e-4120-b5b7-4e49f48ca184",
+              "name": "text",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "15611efc-6b5d-45dc-8cac-5dafd0062486",
+              "name": "session_id",
+              "value": "=user_{{ $node[\"Check Voice/Text\"].json.message.from.id }}",
+              "type": "string"
+            },
+            {
+              "id": "af5cd647-80c6-4792-a176-7c75753fff8b",
+              "name": "user_id",
+              "value": "={{ $node[\"Check Voice/Text\"].json.message.from.id }}",
+              "type": "string"
+            },
+            {
+              "id": "b370249a-5269-4193-a05f-ae669f6bbb52",
+              "name": "username",
+              "value": "={{ $node[\"Check Voice/Text\"].json.message.from.username }}",
+              "type": "string"
+            },
+            {
+              "id": "491d4aa6-196f-4c1f-b2a7-912a288a1d38",
+              "name": "first_name",
+              "value": "={{ $node[\"Check Voice/Text\"].json.message.from.first_name }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        768,
+        480
+      ],
+      "id": "906dd498-cb25-4035-baef-106ab9033ef1",
+      "name": "Set Data From Voice"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        992,
+        576
+      ],
+      "id": "a26fd595-387b-43a0-b592-d213f313d70c",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ef99c98c-c984-48f1-b32d-33fec7291933",
+              "name": "text",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "5077c549-8e8d-40c5-89e6-10b1a0351293",
+              "name": "session_id",
+              "value": "={{ $json.session_id }}",
+              "type": "string"
+            },
+            {
+              "id": "3a8a8488-a4f4-46c8-b622-ab8572f06fcd",
+              "name": "user_id",
+              "value": "={{ $json.user_id }}",
+              "type": "string"
+            },
+            {
+              "id": "a0d4c561-d5e0-4e74-b694-734b4da81706",
+              "name": "username",
+              "value": "={{ $json.username }}",
+              "type": "string"
+            },
+            {
+              "id": "7c8c26bb-ef6d-4b95-96ab-55c8cc6baa92",
+              "name": "first_name",
+              "value": "={{ $json.first_name }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1216,
+        576
+      ],
+      "id": "6a2cae80-1905-41f1-ac49-cbe1aa79c280",
+      "name": "Prepare AI Input"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot5955303362:AAEE_V9_1XUcvX1eA0YPRz4gAUPYsHOnZE0/sendChatAction",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ $json.message.chat.id }}"
+            },
+            {
+              "name": "action",
+              "value": "typing"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        96,
+        784
+      ],
+      "id": "5853bc9c-72cd-49b0-9e89-a1598a1f7bdc",
+      "name": "Typing"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "save_to_asana",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "70afdefa-4cf7-4155-9b7b-5cd2c4212bd5"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Save Task"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "38814431-081b-49f8-965e-551c01249dad",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "save_to_asana",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEquals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2352,
+        576
+      ],
+      "id": "b8a23a42-4d47-4dba-b1af-627b3e9fffae",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawOutput = $input.item.json.output || \"\";\n\nlet parsed;\ntry {\n  const clean = rawOutput.replace(/```json|```/g, \"\").trim();\n  parsed = JSON.parse(clean);\n} catch (e) {\n  parsed = {\n    action: \"continue_dialogue\",\n    reply_text: rawOutput\n  };\n}\n\nreturn {\n  json: {\n    action: parsed.action || \"continue_dialogue\",\n    raw_output: parsed.reply_text || parsed.full_text || rawOutput,\n    full_text: parsed.full_text || \"\"\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2128,
+        576
+      ],
+      "id": "5c668361-8b4e-4ab1-957e-0c4659809005",
+      "name": "Parse and Route AI Output"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "83409ce7-9310-4b38-b65e-c3ffce0ac25d",
+              "name": "task_name",
+              "value": "={{ $json.full_text.split('\\n')[0].replace('ПРОЕКТ ЗАДАЧИ: ', '').trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "bc64c239-353e-4e6b-bfa6-cbc1929d1abe",
+              "name": "letter_body",
+              "value": "={{ $json.full_text.substring($json.full_text.indexOf('\\n') + 1).trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "86b34d6d-f6d8-4b5e-83dd-3d2e8d86a585",
+              "name": "user_telegram_name",
+              "value": "={{ $('Telegram Trigger1').item.json.message.from.first_name }}",
+              "type": "string"
+            },
+            {
+              "id": "76c00faf-d719-4b9a-91c4-3c99d644b6db",
+              "name": "user_telegram_id",
+              "value": "={{ $node[\"Telegram Trigger1\"].json.message.from.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2576,
+        480
+      ],
+      "id": "7fa99795-db2f-48c0-ab9d-255509ad8360",
+      "name": "Extract Letter Data"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $node[\"Telegram Trigger1\"].json.message.chat.id }}",
+        "text": "Закинул в ASANA👍",
+        "replyMarkup": "forceReply",
+        "forceReply": {},
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_notification": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3024,
+        480
+      ],
+      "id": "ec4207d5-eee2-4ece-b261-db35fbe33008",
+      "name": "ASANA Confirmation",
+      "webhookId": "22a07840-fea9-49c1-98e3-47998506b188",
+      "credentials": {
+        "telegramApi": {
+          "id": "q04N1ar5giFKi8f7",
+          "name": "Telegram account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "workspace": "331121027676371",
+        "name": "={{ $node[\"Extract Letter Data\"].json.task_name }}",
+        "otherProperties": {
+          "assignee": "denis@synclab.pro",
+          "due_on": "= {{ DateTime.fromISO($now).toISO() }}",
+          "notes": "={{ $node[\"Extract Letter Data\"].json.letter_body }}"
+        }
+      },
+      "type": "n8n-nodes-base.asana",
+      "typeVersion": 1,
+      "position": [
+        2800,
+        480
+      ],
+      "id": "890fd872-df09-4c1d-8de2-6a41b5caeade",
+      "name": "Create a task",
+      "credentials": {
+        "asanaOAuth2Api": {
+          "id": "UDLVkAN4ZZOAp3Ln",
+          "name": "Сценарист"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Download File": {
+      "main": [
+        [
+          {
+            "node": "Transcribe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe": {
+      "main": [
+        [
+          {
+            "node": "Set Data From Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger1": {
+      "main": [
+        [
+          {
+            "node": "Check Voice/Text",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Typing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Final Text": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Log Request to Supabase": {
+      "main": [
+        [
+          {
+            "node": "AI Agent (RU Промпт)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent (RU Промпт)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent (RU Промпт)",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search in Tavily": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent (RU Промпт)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent (RU Промпт)": {
+      "main": [
+        [
+          {
+            "node": "Parse and Route AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Voice/Text": {
+      "main": [
+        [
+          {
+            "node": "Download File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Final Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Final Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Data From Voice": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Input": {
+      "main": [
+        [
+          {
+            "node": "Log Request to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Typing": {
+      "main": [
+        []
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Extract Letter Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse and Route AI Output": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Letter Data": {
+      "main": [
+        [
+          {
+            "node": "Create a task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ASANA Confirmation": {
+      "main": [
+        []
+      ]
+    },
+    "Create a task": {
+      "main": [
+        [
+          {
+            "node": "ASANA Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "139fba7a0692e9aa7df12ee7970b9bc3d4d7bc3f54c76cd48784aecc28a99583"
+  }
+}

@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Синкотека — Офис</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#1a1a2e;color:#e0e0e0;font-family:'Press Start 2P',monospace;font-size:8px;overflow:hidden;height:100vh}
+
+header{background:#0f3460;border-bottom:3px solid #e94560;padding:8px 20px;display:flex;align-items:center;gap:12px;height:44px}
+.logo{font-size:11px;color:#4ecca3;letter-spacing:2px}
+.sub{font-size:6px;color:#667}
+.dot{width:8px;height:8px;background:#4ecca3;margin-left:auto;animation:blink 1s step-end infinite}
+.live{font-size:6px;color:#4ecca3}
+@keyframes blink{50%{opacity:0}}
+
+.workspace{display:grid;grid-template-columns:1fr 280px;height:calc(100vh - 44px)}
+
+.floor{
+  background:#232340;
+  background-image:
+    linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);
+  background-size:24px 24px;
+  position:relative;overflow:hidden;
+}
+
+.desk-zone{
+  position:absolute;width:260px;height:210px;
+  background:rgba(15,52,96,.45);border:2px solid #2a2a4a;
+  cursor:pointer;transition:border-color .2s,background .2s;
+}
+.desk-zone:hover{border-color:#4ecca3;background:rgba(15,52,96,.65)}
+.dz-ek{left:30px;top:25px}
+.dz-ks{right:30px;top:25px}
+.dz-ma{left:30px;bottom:25px}
+.dz-sa{right:30px;bottom:25px}
+
+.desk-label-bottom{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:5px;color:#445;pointer-events:none}
+.desk-icon-area{position:absolute;bottom:22px;left:8px;font-size:10px}
+.nameplate{position:absolute;top:8px;left:0;right:0;text-align:center;font-size:7px;color:#fff;letter-spacing:1px}
+.roleplate{position:absolute;top:22px;left:0;right:0;text-align:center;font-size:5px;color:#667}
+
+.computer{position:absolute;width:32px;height:24px;background:#111;border:2px solid #334}
+.screen{width:28px;height:16px;background:#0a2a1a;border:1px solid #0f5;margin:2px 2px 0}
+.pixels{width:100%;height:100%;background:repeating-linear-gradient(90deg,#0f4 0 2px,transparent 2px 4px)}
+
+.click-hint{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:5px;color:#334;pointer-events:none;opacity:0;transition:opacity .2s}
+.desk-zone:hover .click-hint{opacity:1}
+
+/* Sprite: 48×88 canvas */
+.agent-wrap{position:absolute;width:48px;height:88px;cursor:pointer;z-index:10}
+.pchar{display:block;image-rendering:pixelated}
+
+.speech{
+  position:absolute;bottom:94px;left:50%;transform:translateX(-50%);
+  background:#1e1e35;border:1px solid #445;padding:5px 7px;font-size:5px;color:#ccc;
+  white-space:nowrap;max-width:210px;overflow:hidden;text-overflow:ellipsis;
+  pointer-events:none;opacity:0;transition:opacity .3s;line-height:1.4;
+}
+.speech.visible{opacity:1}
+.speech:after{content:'';position:absolute;bottom:-5px;left:50%;transform:translateX(-50%);width:0;height:0;border:4px solid transparent;border-top-color:#445}
+
+.nametag{position:absolute;top:-18px;left:50%;transform:translateX(-50%);font-size:5px;white-space:nowrap;color:#aaa}
+.schip{position:absolute;top:-30px;left:50%;transform:translateX(-50%);font-size:5px;white-space:nowrap;padding:2px 4px;border:1px solid}
+.schip.idle{color:#4ecca3;border-color:#4ecca3}
+.schip.working{color:#f0a500;border-color:#f0a500}
+.schip.thinking{color:#e94560;border-color:#e94560;animation:blink .6s step-end infinite}
+.schip.done{color:#7fdbca;border-color:#7fdbca}
+
+/* SIDEBAR */
+.sidebar{background:#16213e;border-left:2px solid #2a2a4a;display:flex;flex-direction:column;overflow:hidden}
+.stitle{background:#0f3460;padding:8px 12px;font-size:7px;color:#4ecca3;letter-spacing:1px;display:flex;align-items:center;gap:6px;border-bottom:1px solid #2a2a4a}
+.stitle .ico{font-size:10px}
+.qsec{flex-shrink:0;border-bottom:2px solid #2a2a4a}
+.qlist{padding:8px;display:flex;flex-direction:column;gap:4px;max-height:130px;overflow-y:auto}
+.qitem{background:#0d1a2e;border-left:3px solid;padding:5px 8px;font-size:6px;color:#bbb;line-height:1.5}
+.qitem.ekaterina{border-color:#4a90d9}.qitem.ksusha{border-color:#e94560}
+.qitem.marina{border-color:#4ecca3}.qitem.sasha{border-color:#f0a500}
+.qa{color:#fff;margin-bottom:2px}
+.logsec{flex:1;overflow:hidden;display:flex;flex-direction:column}
+.loglist{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:3px}
+.loglist::-webkit-scrollbar{width:3px}.loglist::-webkit-scrollbar-thumb{background:#334}
+.loge{display:grid;grid-template-columns:auto 1fr;gap:5px;font-size:6px;line-height:1.5;animation:fi .3s ease}
+@keyframes fi{from{opacity:0}to{opacity:1}}
+.lts{color:#445;white-space:nowrap}.lbody{color:#aaa;word-break:break-word}
+.lagent{font-weight:bold}
+.lagent.ekaterina{color:#4a90d9}.lagent.ksusha{color:#e94560}
+.lagent.marina{color:#4ecca3}.lagent.sasha{color:#f0a500}
+.lagent.biz_dev{color:#b388ff}.lagent.developer{color:#80cbc4}
+
+/* ═══════════ AGENT WINDOWS ═══════════ */
+.agent-win{
+  position:fixed;width:400px;height:340px;
+  background:#0d1a2e;border:2px solid;
+  font-family:'Press Start 2P',monospace;font-size:8px;
+  z-index:200;display:none;flex-direction:column;
+  box-shadow:4px 4px 0 rgba(0,0,0,.85);
+  resize:both;overflow:hidden;min-width:320px;min-height:240px;
+}
+.agent-win.open{display:flex}
+.win-title{display:flex;align-items:center;gap:6px;padding:5px 8px;cursor:move;user-select:none;font-size:6px;flex-shrink:0;letter-spacing:.5px}
+.win-dot{width:6px;height:6px}
+.win-close{margin-left:auto;cursor:pointer;font-size:10px;padding:1px 4px;border:1px solid;line-height:1}
+.win-tabs{display:flex;border-bottom:2px solid;flex-shrink:0}
+.win-tab{padding:5px 10px;cursor:pointer;font-size:6px;color:#445;border-right:1px solid #1a2a4a;letter-spacing:.5px}
+.win-tab.active{color:#fff;background:rgba(255,255,255,.06)}
+.win-body{flex:1;overflow:hidden;display:flex;flex-direction:column}
+.win-panel{display:none;flex:1;overflow:hidden;flex-direction:column}
+.win-panel.active{display:flex}
+.win-log{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:3px}
+.win-log::-webkit-scrollbar{width:3px}.win-log::-webkit-scrollbar-thumb{background:#334}
+.wlog-entry{display:grid;grid-template-columns:auto 1fr;gap:5px;font-size:6px;line-height:1.6;animation:fi .3s ease}
+.wlog-ts{color:#334;white-space:nowrap}.wlog-msg{color:#aaa;word-break:break-word}
+.win-know{flex:1;overflow:hidden;display:flex;flex-direction:column}
+.know-feed{flex:1;overflow-y:auto;padding:6px;display:flex;flex-direction:column;gap:5px}
+.know-feed::-webkit-scrollbar{width:3px}.know-feed::-webkit-scrollbar-thumb{background:#334}
+.know-entry{background:#060e1a;border-left:2px solid;padding:6px 8px;font-size:6px;line-height:1.8}
+.know-entry-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.know-entry-ts{color:#445;font-size:5px}
+.know-entry-del{cursor:pointer;color:#334;font-size:9px;padding:1px 3px}
+.know-entry-del:hover{color:#e94560}
+.know-entry-text{color:#ccc;white-space:pre-wrap;word-break:break-word}
+.know-add{flex-shrink:0;border-top:1px solid #1a2a4a;padding:6px;display:flex;flex-direction:column;gap:4px}
+.know-label{font-size:5px;color:#445;letter-spacing:.5px}
+.know-textarea{background:#060e1a;color:#ccc;border:1px solid #1a2a4a;font-family:'Press Start 2P',monospace;font-size:6px;padding:6px;resize:none;line-height:1.8;outline:none;height:54px}
+.know-textarea:focus{border-color:#4ecca3}
+.know-footer{display:flex;align-items:center;gap:8px}
+.know-save{font-family:'Press Start 2P',monospace;font-size:6px;padding:5px 10px;cursor:pointer;border:1px solid;background:transparent;letter-spacing:.5px}
+.know-save:hover{background:rgba(255,255,255,.06)}
+.know-status{font-size:5px;color:#4ecca3}
+
+.win-ekaterina{border-color:#4a90d9}
+.win-ekaterina .win-title{background:linear-gradient(90deg,#0a1840,#162850);color:#6aaaf9}
+.win-ekaterina .win-dot{background:#4a90d9}
+.win-ekaterina .win-close{color:#4a90d9;border-color:#4a90d9}
+.win-ekaterina .win-tabs{border-color:#1a2a4a}
+.win-ekaterina .win-tab.active{color:#6aaaf9}
+.win-ekaterina .know-entry{border-color:#4a90d9}
+.win-ekaterina .know-save{color:#4a90d9;border-color:#4a90d9}
+
+.win-ksusha{border-color:#e94560}
+.win-ksusha .win-title{background:linear-gradient(90deg,#2a0010,#440020);color:#f96080}
+.win-ksusha .win-dot{background:#e94560}
+.win-ksusha .win-close{color:#e94560;border-color:#e94560}
+.win-ksusha .win-tabs{border-color:#2a1020}
+.win-ksusha .win-tab.active{color:#f96080}
+.win-ksusha .know-entry{border-color:#e94560}
+.win-ksusha .know-save{color:#e94560;border-color:#e94560}
+
+.win-marina{border-color:#4ecca3}
+.win-marina .win-title{background:linear-gradient(90deg,#002820,#004035);color:#6ee8c3}
+.win-marina .win-dot{background:#4ecca3}
+.win-marina .win-close{color:#4ecca3;border-color:#4ecca3}
+.win-marina .win-tabs{border-color:#003020}
+.win-marina .win-tab.active{color:#6ee8c3}
+.win-marina .know-entry{border-color:#4ecca3}
+.win-marina .know-save{color:#4ecca3;border-color:#4ecca3}
+
+.win-sasha{border-color:#f0a500}
+.win-sasha .win-title{background:linear-gradient(90deg,#2a1800,#402800);color:#ffbe40}
+.win-sasha .win-dot{background:#f0a500}
+.win-sasha .win-close{color:#f0a500;border-color:#f0a500}
+.win-sasha .win-tabs{border-color:#2a1800}
+.win-sasha .win-tab.active{color:#ffbe40}
+.win-sasha .know-entry{border-color:#f0a500}
+.win-sasha .know-save{color:#f0a500;border-color:#f0a500}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">СИНКОТЕКА</div>
+  <div class="sub">MULTI-AGENT OFFICE v2.0</div>
+  <div class="dot"></div>
+  <div class="live">LIVE</div>
+</header>
+
+<div class="workspace">
+  <div class="floor" id="floor">
+
+    <div class="desk-zone dz-ek" onclick="openWindow('ekaterina')">
+      <div class="nameplate">ЕКАТЕРИНА</div><div class="roleplate">ЛИЦЕНЗИОННЫЙ МЕНЕДЖЕР</div>
+      <div class="computer" style="position:absolute;right:12px;bottom:36px"><div class="screen"><div class="pixels"></div></div></div>
+      <div class="desk-icon-area">📋</div>
+      <div class="desk-label-bottom">ЛИЦЕНЗИИ · ПРАВА · РАО</div>
+      <div class="click-hint">[ ОТКРЫТЬ ОКНО ]</div>
+    </div>
+
+    <div class="desk-zone dz-ks" onclick="openWindow('ksusha')">
+      <div class="nameplate">КСЮША</div><div class="roleplate">ЮРИСТ ПО ИС</div>
+      <div class="computer" style="position:absolute;right:12px;bottom:36px"><div class="screen"><div class="pixels"></div></div></div>
+      <div class="desk-icon-area">⚖️</div>
+      <div class="desk-label-bottom">ДОГОВОРЫ · ГК РФ · EU</div>
+      <div class="click-hint">[ ОТКРЫТЬ ОКНО ]</div>
+    </div>
+
+    <div class="desk-zone dz-ma" onclick="openWindow('marina')">
+      <div class="nameplate">МАРИНА</div><div class="roleplate">БУХГАЛТЕР</div>
+      <div class="computer" style="position:absolute;right:12px;bottom:36px"><div class="screen"><div class="pixels"></div></div></div>
+      <div class="desk-icon-area">💰</div>
+      <div class="desk-label-bottom">РОЯЛТИ · НДС · ОТЧЁТЫ</div>
+      <div class="click-hint">[ ОТКРЫТЬ ОКНО ]</div>
+    </div>
+
+    <div class="desk-zone dz-sa" onclick="openWindow('sasha')">
+      <div class="nameplate">САША</div><div class="roleplate">КОНТЕНТ-МЕНЕДЖЕР</div>
+      <div class="computer" style="position:absolute;right:12px;bottom:36px"><div class="screen"><div class="pixels"></div></div></div>
+      <div class="desk-icon-area">🎵</div>
+      <div class="desk-label-bottom">КАТАЛОГ · МЕТАДАННЫЕ · ISRC</div>
+      <div class="click-hint">[ ОТКРЫТЬ ОКНО ]</div>
+    </div>
+
+    <!-- Agent sprites: 48×88 -->
+    <div class="agent-wrap" id="agent-ekaterina" onclick="openWindow('ekaterina')">
+      <div class="schip idle" id="chip-ekaterina">СВОБ</div>
+      <div class="nametag">КАТЯ</div>
+      <canvas class="pchar" id="spr-ekaterina" width="48" height="88"></canvas>
+      <div class="speech" id="bub-ekaterina">Готова</div>
+    </div>
+
+    <div class="agent-wrap" id="agent-ksusha" onclick="openWindow('ksusha')">
+      <div class="schip idle" id="chip-ksusha">СВОБ</div>
+      <div class="nametag">КСЮША</div>
+      <canvas class="pchar" id="spr-ksusha" width="48" height="88"></canvas>
+      <div class="speech" id="bub-ksusha">Готова</div>
+    </div>
+
+    <div class="agent-wrap" id="agent-marina" onclick="openWindow('marina')">
+      <div class="schip idle" id="chip-marina">СВОБ</div>
+      <div class="nametag">МАРИНА</div>
+      <canvas class="pchar" id="spr-marina" width="48" height="88"></canvas>
+      <div class="speech" id="bub-marina">Готова</div>
+    </div>
+
+    <div class="agent-wrap" id="agent-sasha" onclick="openWindow('sasha')">
+      <div class="schip idle" id="chip-sasha">СВОБ</div>
+      <div class="nametag">САША</div>
+      <canvas class="pchar" id="spr-sasha" width="48" height="88"></canvas>
+      <div class="speech" id="bub-sasha">Готова</div>
+    </div>
+
+  </div>
+
+  <div class="sidebar">
+    <div class="stitle"><span class="ico">📥</span>ОЧЕРЕДЬ ЗАДАЧ</div>
+    <div class="qsec"><div class="qlist" id="qlist"><div style="font-size:6px;color:#445;padding:4px">Нет активных задач</div></div></div>
+    <div class="stitle"><span class="ico">📡</span>ЛЕНТА СОБЫТИЙ</div>
+    <div class="logsec"><div class="loglist" id="loglist"></div></div>
+  </div>
+</div>
+
+<!-- ═══════════ AGENT WINDOWS ═══════════ -->
+
+<div id="win-ekaterina" class="agent-win win-ekaterina" style="left:50px;top:60px">
+  <div class="win-title" onmousedown="dragStart(event,'win-ekaterina')">
+    <div class="win-dot"></div>📋 ЕКАТЕРИНА — ЛИЦЕНЗИОННЫЙ МЕНЕДЖЕР
+    <span class="win-close" onclick="closeWindow('ekaterina')">×</span>
+  </div>
+  <div class="win-tabs">
+    <div class="win-tab active" onclick="switchTab('ekaterina','activity',this)">▶ АКТИВНОСТЬ</div>
+    <div class="win-tab" onclick="switchTab('ekaterina','knowledge',this)">📚 ЗНАНИЯ</div>
+  </div>
+  <div class="win-body">
+    <div class="win-panel active" id="panel-ekaterina-activity">
+      <div class="win-log" id="wlog-ekaterina"><div style="font-size:6px;color:#334;padding:4px">Нет активности</div></div>
+    </div>
+    <div class="win-panel" id="panel-ekaterina-knowledge">
+      <div class="win-know">
+        <div class="know-feed" id="kfeed-ekaterina"></div>
+        <div class="know-add">
+          <div class="know-label">НОВАЯ ЗАПИСЬ ↓</div>
+          <textarea class="know-textarea" id="ktext-ekaterina" placeholder="Добавь знание для Екатерины..."></textarea>
+          <div class="know-footer">
+            <button class="know-save" onclick="addEntry('ekaterina')">+ ДОБАВИТЬ</button>
+            <div class="know-status" id="kstatus-ekaterina"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="win-ksusha" class="agent-win win-ksusha" style="left:110px;top:80px">
+  <div class="win-title" onmousedown="dragStart(event,'win-ksusha')">
+    <div class="win-dot"></div>⚖️ КСЮША — ЮРИСТ ПО ИС
+    <span class="win-close" onclick="closeWindow('ksusha')">×</span>
+  </div>
+  <div class="win-tabs">
+    <div class="win-tab active" onclick="switchTab('ksusha','activity',this)">▶ АКТИВНОСТЬ</div>
+    <div class="win-tab" onclick="switchTab('ksusha','knowledge',this)">📚 ЗНАНИЯ</div>
+  </div>
+  <div class="win-body">
+    <div class="win-panel active" id="panel-ksusha-activity">
+      <div class="win-log" id="wlog-ksusha"><div style="font-size:6px;color:#334;padding:4px">Нет активности</div></div>
+    </div>
+    <div class="win-panel" id="panel-ksusha-knowledge">
+      <div class="win-know">
+        <div class="know-feed" id="kfeed-ksusha"></div>
+        <div class="know-add">
+          <div class="know-label">НОВАЯ ЗАПИСЬ ↓</div>
+          <textarea class="know-textarea" id="ktext-ksusha" placeholder="Добавь знание для Ксюши..."></textarea>
+          <div class="know-footer">
+            <button class="know-save" onclick="addEntry('ksusha')">+ ДОБАВИТЬ</button>
+            <div class="know-status" id="kstatus-ksusha"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="win-marina" class="agent-win win-marina" style="left:170px;top:100px">
+  <div class="win-title" onmousedown="dragStart(event,'win-marina')">
+    <div class="win-dot"></div>💰 МАРИНА — БУХГАЛТЕР
+    <span class="win-close" onclick="closeWindow('marina')">×</span>
+  </div>
+  <div class="win-tabs">
+    <div class="win-tab active" onclick="switchTab('marina','activity',this)">▶ АКТИВНОСТЬ</div>
+    <div class="win-tab" onclick="switchTab('marina','knowledge',this)">📚 ЗНАНИЯ</div>
+  </div>
+  <div class="win-body">
+    <div class="win-panel active" id="panel-marina-activity">
+      <div class="win-log" id="wlog-marina"><div style="font-size:6px;color:#334;padding:4px">Нет активности</div></div>
+    </div>
+    <div class="win-panel" id="panel-marina-knowledge">
+      <div class="win-know">
+        <div class="know-feed" id="kfeed-marina"></div>
+        <div class="know-add">
+          <div class="know-label">НОВАЯ ЗАПИСЬ ↓</div>
+          <textarea class="know-textarea" id="ktext-marina" placeholder="Добавь знание для Марины..."></textarea>
+          <div class="know-footer">
+            <button class="know-save" onclick="addEntry('marina')">+ ДОБАВИТЬ</button>
+            <div class="know-status" id="kstatus-marina"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="win-sasha" class="agent-win win-sasha" style="left:230px;top:120px">
+  <div class="win-title" onmousedown="dragStart(event,'win-sasha')">
+    <div class="win-dot"></div>🎵 САША — КОНТЕНТ-МЕНЕДЖЕР
+    <span class="win-close" onclick="closeWindow('sasha')">×</span>
+  </div>
+  <div class="win-tabs">
+    <div class="win-tab active" onclick="switchTab('sasha','activity',this)">▶ АКТИВНОСТЬ</div>
+    <div class="win-tab" onclick="switchTab('sasha','knowledge',this)">📚 ЗНАНИЯ</div>
+  </div>
+  <div class="win-body">
+    <div class="win-panel active" id="panel-sasha-activity">
+      <div class="win-log" id="wlog-sasha"><div style="font-size:6px;color:#334;padding:4px">Нет активности</div></div>
+    </div>
+    <div class="win-panel" id="panel-sasha-knowledge">
+      <div class="win-know">
+        <div class="know-feed" id="kfeed-sasha"></div>
+        <div class="know-add">
+          <div class="know-label">НОВАЯ ЗАПИСЬ ↓</div>
+          <textarea class="know-textarea" id="ktext-sasha" placeholder="Добавь знание для Саши..."></textarea>
+          <div class="know-footer">
+            <button class="know-save" onclick="addEntry('sasha')">+ ДОБАВИТЬ</button>
+            <div class="know-status" id="kstatus-sasha"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════
+//  FEMALE PIXEL SPRITES — 12×22 @ SCALE 4
+//  Total canvas: 48×88 px
+//  Freepik "collection-pixelated-young-characters" style
+//  Rows: 0-3 hair | 4-9 face | 10-13 jacket
+//        14-17 skirt | 18-21 legs+shoes
+// ═══════════════════════════════════════════
+
+const SCALE = 4;
+
+// h=hair  s=skin  e=eye(vivid)  m=lips  b=jacket  c=collar  d=skirt  l=leg  k=shoe
+const PAL = {
+  ekaterina: { h:'#C8944A', s:'#f5cba7', e:'#27ae60', m:'#E91E63', b:'#1a2a4a', c:'#3a78c9', d:'#c8d8f0', l:'#edc898', k:'#101018' },
+  ksusha:    { h:'#3d0000', s:'#f5cba7', e:'#16a085', m:'#c0392b', b:'#1a1a1a', c:'#ecf0f1', d:'#2a0808', l:'#edc898', k:'#1a0808' },
+  marina:    { h:'#6B2FA0', s:'#f5cba7', e:'#2980b9', m:'#E91E63', b:'#16a085', c:'#9b59b6', d:'#c0b8e8', l:'#edc898', k:'#101018' },
+  sasha:     { h:'#8B4513', s:'#f5cba7', e:'#2980b9', m:'#e91e63', b:'#c0392b', c:'#f1948a', d:'#1a2a5e', l:'#edc898', k:'#101018' },
+};
+
+// Per-character hair rows 0-3, all 12-wide
+// Rows 2-3 are full-width so hair flows into face sides naturally
+const HAIR = {
+  ekaterina: [  // honey-brown, shoulder-length flowing
+    '...hhhhhh...',
+    '..hhhhhhhh..',
+    'hhhhhhhhhhhh',
+    'hhhhhhhhhhhh',
+  ],
+  ksusha: [     // very dark red, updo bun with side wisps
+    '....hhhh....',
+    '...hhhhhh...',
+    'hhhhhhhhhhhh',
+    'hhhhhhhhhhhh',
+  ],
+  marina: [     // purple, wavy crown
+    '.h.hhhhhh.h.',
+    'hhhhhhhhhhhh',
+    'hhhhhhhhhhhh',
+    'hhhhhhhhhhhh',
+  ],
+  sasha: [      // warm brown, loose waves
+    '..hhhhhhhh..',
+    '.hhhhhhhhhh.',
+    'hhhhhhhhhhhh',
+    'hhhhhhhhhhhh',
+  ],
+};
+
+// Face rows 4-9 — 'h' at columns 0-1 and 10-11 frames face with hair
+const BASE_FACE = [
+  '..ssssssss..',  // 4 forehead
+  'hhseesseeshh',  // 5 vivid eyes + hair frame
+  '..ssssssss..',  // 6 cheeks
+  'hhssmmmmsshh',  // 7 bright lips + hair frame
+  '..ssssssss..',  // 8 chin
+  '....ssss....',  // 9 neck
+];
+
+// Jacket torso — long hair hangs alongside body
+const BODY_LONG = [
+  'hhbbbbbbbbhh',  // 10 shoulders
+  'hhbbcbbbbbhh',  // 11 collar peek left
+  'hhbbbccbbbhh',  // 12 wider collar V
+  'hhbbbbbbbbhh',  // 13 waist
+];
+
+// Jacket torso — Ksusha bun, no side hair
+const BODY_SHORT = [
+  '..bbbbbbbb..',
+  '..bbcbbbbb..',
+  '..bbbccbbb..',
+  '..bbbbbbbb..',
+];
+
+// Skirt — long hair continues on sides
+const SKIRT_LONG = [
+  'hhddddddddhh',  // 14
+  'hhddddddddhh',  // 15
+  'dddddddddddd',  // 16 full hem
+  'dddddddddddd',  // 17
+];
+
+const SKIRT_SHORT = [
+  '..dddddddd..',  // 14
+  '.dddddddddd.',  // 15
+  'dddddddddddd',  // 16
+  'dddddddddddd',  // 17
+];
+
+// Walk frames rows 18-21
+const WALK = [
+  ['...ll..ll...','...ll..ll...','...kk..kk...','...kk..kk...'],
+  ['.llll....l..','.llll....l..','.kkkk....k..','.kkkk....k..'],
+  ['...ll..ll...','...ll..ll...','...kk..kk...','...kk..kk...'],
+  ['..l.....llll','..l.....llll','..k.....kkkk','..k.....kkkk'],
+];
+
+function drawSprite(canvasId, name, frame, flipX) {
+  const c = document.getElementById(canvasId);
+  if (!c) return;
+  const ctx = c.getContext('2d');
+  const pal = PAL[name];
+  if (!pal) return;
+
+  const isLong = (name !== 'ksusha');
+  const rows = [
+    ...(HAIR[name] || HAIR.sasha),
+    ...BASE_FACE,
+    ...(isLong ? BODY_LONG : BODY_SHORT),
+    ...(isLong ? SKIRT_LONG : SKIRT_SHORT),
+    ...WALK[frame % 4],
+  ];
+
+  ctx.clearRect(0, 0, c.width, c.height);
+  if (flipX) { ctx.save(); ctx.translate(c.width, 0); ctx.scale(-1, 1); }
+
+  rows.forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) {
+      const ch = row[x];
+      if (ch === '.') continue;
+      ctx.fillStyle = pal[ch] || '#ff00ff';
+      ctx.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+    }
+  });
+
+  if (flipX) ctx.restore();
+}
+
+// ═══════════ OVAL ANIMATION ═══════════
+
+const ZONES = {
+  ekaterina:{cx:0,cy:0,rx:80,ry:42,speed:.008,phase:0},
+  ksusha:   {cx:0,cy:0,rx:80,ry:42,speed:.006,phase:Math.PI*.7},
+  marina:   {cx:0,cy:0,rx:80,ry:42,speed:.007,phase:Math.PI*1.3},
+  sasha:    {cx:0,cy:0,rx:80,ry:42,speed:.009,phase:Math.PI*.3},
+};
+
+const AGENTS = ['ekaterina','ksusha','marina','sasha'];
+const agentAngle={},agentFrame={},agentFrameTick={},agentStatus={},agentFlip={};
+
+AGENTS.forEach(a=>{
+  agentAngle[a]=ZONES[a].phase; agentFrame[a]=0; agentFrameTick[a]=0;
+  agentStatus[a]='idle'; agentFlip[a]=false;
+});
+
+function recalcZones(){
+  const floor=document.getElementById('floor');
+  const fr=floor.getBoundingClientRect();
+  const dzMap={ekaterina:'.dz-ek',ksusha:'.dz-ks',marina:'.dz-ma',sasha:'.dz-sa'};
+  AGENTS.forEach(a=>{
+    const el=floor.querySelector(dzMap[a]); if(!el)return;
+    const r=el.getBoundingClientRect();
+    const x=r.left-fr.left+r.width*.42;
+    const y=r.top-fr.top+r.height*.46;
+    const wrap=document.getElementById('agent-'+a);
+    if(wrap){wrap.style.left=(x-24)+'px';wrap.style.top=(y-44)+'px';}
+  });
+}
+
+function animationLoop(){
+  AGENTS.forEach(a=>{
+    const st=agentStatus[a];
+    if(st==='working'){
+      if(++agentFrameTick[a]>=5){agentFrameTick[a]=0;agentFrame[a]=(agentFrame[a]+1)%4;}
+    } else {
+      agentFrame[a]=0; agentFrameTick[a]=0;
+    }
+    drawSprite('spr-'+a,a,agentFrame[a],false);
+  });
+  requestAnimationFrame(animationLoop);
+}
+
+// ═══════════ STATUS ═══════════
+
+const SL={idle:'СВОБ',working:'РАБОТ',thinking:'ДУМАЕТ',done:'ГОТОВО'};
+
+function updateAgent(ev){
+  const{agent,status,message,type}=ev;
+  if(!AGENTS.includes(agent))return;
+  if(status&&status!=='ping')agentStatus[agent]=status;
+  const chip=document.getElementById('chip-'+agent);
+  if(chip&&status){chip.className='schip '+status;chip.textContent=SL[status]||status;}
+  const bub=document.getElementById('bub-'+agent);
+  if(bub&&message&&type!=='ping'){
+    bub.textContent=message.slice(0,60)+(message.length>60?'…':'');
+    bub.classList.add('visible');
+    if(status==='idle')setTimeout(()=>bub.classList.remove('visible'),4000);
+  }
+}
+
+function addLog(ev){
+  if(ev.type==='ping')return;
+  const list=document.getElementById('loglist');
+  const e=document.createElement('div');
+  e.className='loge';
+  e.innerHTML=`<div class="lts">${ev.ts||''}</div><div class="lbody"><span class="lagent ${ev.agent}">${ev.display||ev.agent}</span> → ${(ev.message||'').slice(0,80)}</div>`;
+  list.prepend(e);
+  while(list.children.length>80)list.lastChild.remove();
+}
+
+const tasks=[];
+function addTask(ev){
+  if(ev.type!=='task_start')return;
+  tasks.unshift({agent:ev.agent,display:ev.display,msg:ev.message});
+  if(tasks.length>8)tasks.pop(); renderQ();
+}
+function doneTask(ev){
+  if(ev.status!=='idle')return;
+  const i=tasks.findIndex(t=>t.agent===ev.agent);
+  if(i>=0)tasks.splice(i,1); renderQ();
+}
+function renderQ(){
+  const list=document.getElementById('qlist');
+  if(!tasks.length){list.innerHTML='<div style="font-size:6px;color:#445;padding:4px">Нет активных задач</div>';return;}
+  list.innerHTML=tasks.map(t=>`<div class="qitem ${t.agent}"><div class="qa">${t.display}</div>${t.msg.slice(0,60)}</div>`).join('');
+}
+
+// ═══════════ AGENT WINDOWS ═══════════
+
+const winState={};
+let topZ=300;
+
+function bringToFront(agent){
+  topZ++;
+  const el=document.getElementById('win-'+agent);
+  if(el)el.style.zIndex=topZ;
+}
+
+async function openWindow(agent){
+  const el=document.getElementById('win-'+agent);
+  if(!el)return;
+  if(el.classList.contains('open')){bringToFront(agent);return;}
+  el.classList.add('open');
+  bringToFront(agent);
+  el.addEventListener('mousedown',()=>bringToFront(agent),{capture:true});
+  try{
+    const res=await fetch('/api/agent-log/'+agent);
+    const data=await res.json();
+    if(data.log?.length){
+      const logEl=document.getElementById('wlog-'+agent);
+      logEl.innerHTML='';
+      data.log.forEach(e=>addWinLog(agent,e));
+    }
+  }catch(_){}
+}
+
+function closeWindow(agent){
+  const el=document.getElementById('win-'+agent);
+  if(el)el.classList.remove('open');
+}
+
+function switchTab(agent,tab,tabEl){
+  tabEl.closest('.win-tabs').querySelectorAll('.win-tab').forEach(t=>t.classList.remove('active'));
+  tabEl.classList.add('active');
+  const act=document.getElementById('panel-'+agent+'-activity');
+  const knw=document.getElementById('panel-'+agent+'-knowledge');
+  if(tab==='activity'){act.classList.add('active');knw.classList.remove('active');}
+  else{knw.classList.add('active');act.classList.remove('active');loadKnowledge(agent);}
+}
+
+// ═══════════ KNOWLEDGE FEED ═══════════
+
+async function loadKnowledge(agent){
+  try{
+    const res=await fetch('/api/knowledge/'+agent);
+    const data=await res.json();
+    renderFeed(agent,data.entries||[]);
+  }catch(_){}
+}
+
+function escHtml(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');}
+
+function renderFeed(agent,entries){
+  const feed=document.getElementById('kfeed-'+agent);
+  if(!feed)return;
+  feed.innerHTML='';
+  if(!entries.length){
+    feed.innerHTML='<div style="font-size:6px;color:#334;padding:6px">Нет записей. Добавь первую ↓</div>';
+    return;
+  }
+  entries.forEach((entry,i)=>{
+    const el=document.createElement('div');
+    el.className='know-entry';
+    el.innerHTML=`<div class="know-entry-header"><span class="know-entry-ts">[${entry.ts||'—'}]</span><span class="know-entry-del" onclick="deleteEntry('${agent}',${i})" title="Удалить">×</span></div><div class="know-entry-text">${escHtml(entry.text||'')}</div>`;
+    feed.appendChild(el);
+  });
+}
+
+async function addEntry(agent){
+  const ta=document.getElementById('ktext-'+agent);
+  const st=document.getElementById('kstatus-'+agent);
+  const text=ta?.value?.trim();
+  if(!text)return;
+  try{
+    await fetch('/api/knowledge/'+agent+'/entry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+    ta.value=''; st.textContent='✓ ДОБАВЛЕНО';
+    setTimeout(()=>{st.textContent='';},2000);
+    await loadKnowledge(agent);
+  }catch(_){st.textContent='✗ ОШИБКА';}
+}
+
+async function deleteEntry(agent,index){
+  try{await fetch(`/api/knowledge/${agent}/entry/${index}`,{method:'DELETE'});await loadKnowledge(agent);}catch(_){}
+}
+
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){
+    const a=document.activeElement;
+    if(a?.classList?.contains('know-textarea'))addEntry(a.id.replace('ktext-',''));
+  }
+});
+
+function addWinLog(agent,ev){
+  if(ev.type==='ping')return;
+  const logEl=document.getElementById('wlog-'+agent);
+  if(!logEl)return;
+  if(logEl.children.length===1&&logEl.querySelector('[style*="color:#334"]'))logEl.innerHTML='';
+  const e=document.createElement('div');
+  e.className='wlog-entry';
+  e.innerHTML=`<div class="wlog-ts">${ev.ts||''}</div><div class="wlog-msg">${(ev.message||'').slice(0,120)}</div>`;
+  logEl.prepend(e);
+  while(logEl.children.length>60)logEl.lastChild.remove();
+}
+
+// ═══════════ DRAG ═══════════
+
+let drag=null;
+function dragStart(e,winId){
+  if(e.target.classList.contains('win-close'))return;
+  const el=document.getElementById(winId);
+  bringToFront(winId.replace('win-',''));
+  const r=el.getBoundingClientRect();
+  drag={el,ox:e.clientX-r.left,oy:e.clientY-r.top};
+  e.preventDefault();
+}
+document.addEventListener('mousemove',e=>{if(drag){drag.el.style.left=(e.clientX-drag.ox)+'px';drag.el.style.top=(e.clientY-drag.oy)+'px';}});
+document.addEventListener('mouseup',()=>{drag=null;});
+
+// ═══════════ SSE ═══════════
+
+function connect(){
+  const src=new EventSource('/events');
+  src.onmessage=e=>{
+    try{
+      const ev=JSON.parse(e.data);
+      updateAgent(ev);addLog(ev);addTask(ev);doneTask(ev);
+      if(ev.agent&&document.getElementById('win-'+ev.agent)?.classList.contains('open'))addWinLog(ev.agent,ev);
+    }catch(_){}
+  };
+  src.onerror=()=>{src.close();setTimeout(connect,2000);};
+}
+
+// ═══════════ INIT ═══════════
+
+window.addEventListener('load',()=>{
+  recalcZones();
+  window.addEventListener('resize',recalcZones);
+  fetch('/api/state').then(r=>r.json()).then(st=>{
+    Object.entries(st.statuses||{}).forEach(([a,s])=>{
+      agentStatus[a]=s;
+      const chip=document.getElementById('chip-'+a);
+      if(chip){chip.className='schip '+s;chip.textContent=SL[s]||s;}
+    });
+    (st.history||[]).slice(0,30).reverse().forEach(addLog);
+  }).catch(()=>{});
+  animationLoop();
+  connect();
+});
+</script>
+</body>
+</html>
