@@ -26,3 +26,4 @@ data/knowledge/docs/
 .DS_Store
 src/.DS_Store
 src/syncoteca/config/.DS_Store
+CBAPI.txt
