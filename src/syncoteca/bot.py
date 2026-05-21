@@ -787,7 +787,7 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
                 description=result.get("description", ""),
                 attendees=result.get("attendees", []),
             ))
-            await thinking_msg.edit_text(f"🎯 Оля:\n\n{cal_result}")
+            await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{cal_result}")
         else:
             reply = result.get("text", "…")
             await thinking_msg.edit_text(f"🎯 Координатор:\n\n{reply}")
