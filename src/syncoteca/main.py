@@ -1,5 +1,5 @@
 """
-Синкотека — Multi-Agent Office entry point.
+SYNC LAB — Multi-Agent Office entry point.
 
 Usage:
     python -m syncoteca.main                          # interactive menu
@@ -69,7 +69,7 @@ def run_content(inputs: dict | None = None) -> None:
             "has_stems": True,
             "isrc": "RU-A00-25-00001",
             "composer": "Алексей Иванов",
-            "publisher": "Синкотека",
+            "publisher": "SYNC LAB",
             "territory": "Worldwide",
         },
         "task_description": "Add new electronic track with full stems to catalog",
@@ -143,7 +143,7 @@ def run() -> None:
     if not check_env():
         sys.exit(1)
 
-    parser = argparse.ArgumentParser(description="Синкотека Multi-Agent Office")
+    parser = argparse.ArgumentParser(description="SYNC LAB Multi-Agent Office")
     parser.add_argument(
         "--crew",
         choices=list(CREWS.keys()),

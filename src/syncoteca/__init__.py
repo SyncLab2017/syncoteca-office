@@ -1,1 +1,1 @@
-"""Синкотека — Multi-Agent Music Sync Licensing Office."""
+"""SYNC LAB — Multi-Agent Music Sync Licensing Office."""

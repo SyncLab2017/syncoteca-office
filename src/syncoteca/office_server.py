@@ -1,4 +1,4 @@
-"""FastAPI server for the Синкотека pixel office dashboard."""
+"""FastAPI server for the SYNC LAB pixel office dashboard."""
 
 import asyncio
 import json
@@ -21,7 +21,7 @@ KNOWLEDGE_DIR = Path(__file__).parent.parent.parent / "data" / "knowledge"
 
 VALID_AGENTS = {"ekaterina", "ksusha", "marina", "sasha", "biz_dev", "developer"}
 
-app = FastAPI(title="Синкотека Office", docs_url=None, redoc_url=None)
+app = FastAPI(title="SYNC LAB Office", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -128,7 +128,7 @@ async def sse():
 
 def run_office(host: str = "127.0.0.1", port: int = 7788) -> None:
     import uvicorn
-    print(f"\n🖥️  Синкотека Office: http://{host}:{port}\n")
+    print(f"\n🖥️  SYNC LAB Office: http://{host}:{port}\n")
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 

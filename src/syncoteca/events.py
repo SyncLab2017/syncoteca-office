@@ -1,4 +1,4 @@
-"""Thread-safe event bus for the Синкотека pixel office."""
+"""Thread-safe event bus for the SYNC LAB pixel office."""
 
 import asyncio
 import json

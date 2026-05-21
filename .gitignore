@@ -33,3 +33,8 @@ data/*.txt
 *.jpg
 *.jpeg
 *.png
+
+# Google OAuth credentials — never commit
+client_secret_*.json
+.env.google_token
+get_google_token.py

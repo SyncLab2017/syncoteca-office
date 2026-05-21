@@ -27,7 +27,7 @@ def rows_to_json(rows: list[sqlite3.Row]) -> str:
 
 class DatabaseTool(BaseTool):
     """
-    Syncoteca knowledge base (SQLite, 9471 records total).
+    SYNC LAB knowledge base (SQLite, 9471 records total).
 
     Tables:
       contracts (310)     — real licensing deals: licensee, project, territory, cost
@@ -83,7 +83,7 @@ class DatabaseTool(BaseTool):
 
     name: str = "database"
     description: str = (
-        "Syncoteca knowledge base: 310 contracts, 460 musical works, 7662 Yandex Music tracks, "
+        "SYNC LAB knowledge base: 310 contracts, 460 musical works, 7662 Yandex Music tracks, "
         "447 labels, 592 contacts, 322,689 RAO-registered works, "
         "book 'Музыкальный редактор' (380 pages FTS), ГК РФ ч.4 (126 articles FTS). "
         "Actions: search_contracts, get_contract, list_contracts, stats_contracts, "
@@ -224,7 +224,7 @@ class DatabaseTool(BaseTool):
             works_total = conn.execute("SELECT COUNT(*) FROM musical_works").fetchone()[0]
 
         return (
-            f"=== Статистика базы Синкотека ===\n"
+            f"=== Статистика базы SYNC LAB ===\n"
             f"Договоров: {total}\n"
             f"Музыкальных произведений: {works_total}\n\n"
             f"По типу проекта:\n"

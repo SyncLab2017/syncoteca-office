@@ -42,6 +42,7 @@ from .tools import (
     RoyaltyCalculatorTool,
     MetadataTool,
     SupabaseTool,
+    GoogleCalendarTool,
 )
 
 load_dotenv(override=True)
@@ -76,7 +77,7 @@ def make_sonnet() -> LLM:
 
 @CrewBase
 class SyncotecaCrew:
-    """Синкотека — Multi-Agent Music Sync Licensing Office."""
+    """SYNC LAB — Multi-Agent Music Sync Licensing Office."""
 
     agents_config = str(CONFIG_DIR / "agents.yaml")
     tasks_config = str(CONFIG_DIR / "tasks.yaml")
@@ -89,16 +90,22 @@ class SyncotecaCrew:
     _royalty = RoyaltyCalculatorTool()
     _metadata = MetadataTool()
     _synclab = SupabaseTool()
+    _gcal = GoogleCalendarTool()
 
     # --- Agents ---
 
     @agent
     def coordinator(self) -> Agent:
+        cfg = dict(self.agents_config["coordinator"])
+        cfg["backstory"] = cfg.get("backstory", "") + _load_knowledge("olya")
         return Agent(
-            config=self.agents_config["coordinator"],
+            config=cfg,
             llm=make_llm(),
+            tools=[self._gcal],
+            memory=True,
             verbose=True,
             allow_delegation=True,
+            step_callback=_make_step_callback("olya"),
         )
 
     @agent

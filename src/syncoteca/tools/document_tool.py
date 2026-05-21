@@ -111,7 +111,7 @@ class DocumentTool(BaseTool):
             "number": datetime.now().strftime("%Y%m%d-%H%M"),
             "date": datetime.now().strftime("%d.%m.%Y"),
             "vat_rate": 20,
-            "seller_name": os.getenv("AGENCY_NAME", "Синкотека"),
+            "seller_name": os.getenv("AGENCY_NAME", "SYNC LAB"),
             "seller_inn": os.getenv("AGENCY_INN", ""),
         }
         params = {**defaults, **params}

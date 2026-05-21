@@ -1,4 +1,4 @@
-"""Telegram bot interface for Синкотека multi-agent office."""
+"""Telegram bot interface for SYNC LAB multi-agent office."""
 
 import asyncio
 import json
@@ -294,7 +294,7 @@ def run_direct_agent(agent_name: str, chat_id: int, user_message: str) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-    system = DIRECT_PROMPTS.get(agent_name) or "Ты — помощник агентства Синкотека."
+    system = DIRECT_PROMPTS.get(agent_name) or "Ты — помощник агентства SYNC LAB."
     history = DIRECT_SESSIONS[agent_name][chat_id]
     history.append({"role": "user", "content": user_message})
 
@@ -341,7 +341,7 @@ def run_agent(agent_name: str, user_request: str) -> str:
 
     task = Task(
         description=(
-            f"Запрос от Дениса (руководителя Синкотека):\n\n{user_request}\n\n"
+            f"Запрос от Дениса (руководителя SYNC LAB):\n\n{user_request}\n\n"
             "Дай конкретный, практически применимый ответ на русском языке. "
             "Используй инструменты (synclab_db, database, search и др.) если нужны данные. "
             "Если нужна консультация с Денисом — явно укажи это в ответе. "
@@ -368,7 +368,13 @@ def run_agent(agent_name: str, user_request: str) -> str:
 
 # --- Coordinator ---
 
-COORDINATOR_PROMPT = _load_prompt("coordinator")
+_COORDINATOR_PROMPT_TEMPLATE = _load_prompt("coordinator")
+
+
+def _get_coordinator_prompt() -> str:
+    from datetime import date
+    today = date.today().strftime("%Y-%m-%d")
+    return _COORDINATOR_PROMPT_TEMPLATE.replace("{TODAY}", today)
 
 
 def run_coordinator(chat_id: int, message: str) -> dict:
@@ -381,7 +387,7 @@ def run_coordinator(chat_id: int, message: str) -> dict:
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=600,
-        system=COORDINATOR_PROMPT,
+        system=_get_coordinator_prompt(),
         messages=history[-12:],
     )
 
@@ -463,7 +469,7 @@ async def _save_to_memory(mem_name: str, text: str, update: Update) -> None:
 # --- Command handlers ---
 
 WELCOME = """
-👋 *Синкотека* — AI-офис музыкального агентства.
+👋 *SYNC LAB* — AI-офис музыкального агентства.
 
 По умолчанию работает *Координатор* — он сам поймёт кому передать задачу.
 
@@ -769,6 +775,19 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
                 await _dispatch_license(update, task)
             else:
                 await _dispatch(update, agent_name, task)
+        elif action == "calendar":
+            await thinking_msg.edit_text("📅 Создаю встречу…")
+            from syncoteca.tools.google_calendar_tool import GoogleCalendarTool
+            cal = GoogleCalendarTool()
+            cal_result = await loop.run_in_executor(None, lambda: cal._run(
+                title=result.get("title", "Встреча"),
+                date=result.get("date", ""),
+                time=result.get("time", "10:00"),
+                duration_minutes=int(result.get("duration_minutes", 60)),
+                description=result.get("description", ""),
+                attendees=result.get("attendees", []),
+            ))
+            await thinking_msg.edit_text(f"🎯 Оля:\n\n{cal_result}")
         else:
             reply = result.get("text", "…")
             await thinking_msg.edit_text(f"🎯 Координатор:\n\n{reply}")
@@ -832,7 +851,7 @@ def run_bot() -> None:
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Синкотека bot starting…")
+    logger.info("SYNC LAB bot starting…")
     app.run_polling(drop_pending_updates=True)
 
 
