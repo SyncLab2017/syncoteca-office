@@ -1,0 +1,7 @@
+[build]
+buildCommand = "pip install --timeout 120 --retries 5 -e ."
+
+[deploy]
+startCommand = "python start.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
