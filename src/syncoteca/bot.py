@@ -791,6 +791,16 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
                 ),
             )
             await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{cal_result}")
+        elif action == "search":
+            query = result.get("query", text)
+            await thinking_msg.edit_text(f"🔍 Ищу: {query}…")
+            from syncoteca.tools.web_search_tool import WebSearchTool
+            searcher = WebSearchTool()
+            search_results = await loop.run_in_executor(None, lambda: searcher._run(query))
+            followup = f"Результаты поиска по запросу «{query}»:\n\n{search_results}\n\nОтветь кратко на вопрос пользователя: {text}"
+            final = await loop.run_in_executor(None, run_coordinator, chat_id, followup)
+            reply = final.get("text", search_results)
+            await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{reply}")
         else:
             reply = result.get("text", "…")
             await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{reply}")

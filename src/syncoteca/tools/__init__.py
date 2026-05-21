@@ -6,6 +6,7 @@ from .royalty_tool import RoyaltyCalculatorTool
 from .metadata_tool import MetadataTool
 from .supabase_tool import SupabaseTool
 from .google_calendar_tool import GoogleCalendarTool
+from .web_search_tool import WebSearchTool
 
 __all__ = [
     "SearchRightsHolderTool",
@@ -16,4 +17,5 @@ __all__ = [
     "MetadataTool",
     "SupabaseTool",
     "GoogleCalendarTool",
+    "WebSearchTool",
 ]
