@@ -368,7 +368,13 @@ def run_agent(agent_name: str, user_request: str) -> str:
 
 # --- Coordinator ---
 
-COORDINATOR_PROMPT = _load_prompt("coordinator")
+_COORDINATOR_PROMPT_TEMPLATE = _load_prompt("coordinator")
+
+
+def _get_coordinator_prompt() -> str:
+    from datetime import date
+    today = date.today().strftime("%Y-%m-%d")
+    return _COORDINATOR_PROMPT_TEMPLATE.replace("{TODAY}", today)
 
 
 def run_coordinator(chat_id: int, message: str) -> dict:
@@ -381,7 +387,7 @@ def run_coordinator(chat_id: int, message: str) -> dict:
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=600,
-        system=COORDINATOR_PROMPT,
+        system=_get_coordinator_prompt(),
         messages=history[-12:],
     )
 
@@ -753,7 +759,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def _dispatch_coordinator(update: Update, text: str) -> None:
     chat_id = update.effective_chat.id
-    thinking_msg = await update.message.reply_text("🎯 Координатор…")
+    thinking_msg = await update.message.reply_text("🎯 Рядовой…")
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, run_coordinator, chat_id, text)
@@ -769,9 +775,25 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
                 await _dispatch_license(update, task)
             else:
                 await _dispatch(update, agent_name, task)
+        elif action == "calendar":
+            await thinking_msg.edit_text("📅 Создаю встречу…")
+            from syncoteca.tools.google_calendar_tool import GoogleCalendarTool
+            cal = GoogleCalendarTool()
+            cal_result = await loop.run_in_executor(
+                None,
+                lambda: cal._run(
+                    title=result.get("title", "Встреча"),
+                    date=result.get("date", ""),
+                    time=result.get("time", "10:00"),
+                    duration_minutes=int(result.get("duration_minutes", 60)),
+                    description=result.get("description", ""),
+                    attendees=result.get("attendees", []),
+                ),
+            )
+            await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{cal_result}")
         else:
             reply = result.get("text", "…")
-            await thinking_msg.edit_text(f"🎯 Координатор:\n\n{reply}")
+            await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{reply}")
     except Exception as e:
         logger.exception("Coordinator error")
         await thinking_msg.edit_text(f"Ошибка координатора: {e}")
