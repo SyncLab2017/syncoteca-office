@@ -219,7 +219,13 @@ def save_to_asana(full_text: str) -> str:
     task_name = lines[0].replace("ПРОЕКТ ЗАДАЧИ:", "").strip().strip("«»") if lines else "Запрос лицензии"
     notes = "\n".join(lines[1:]).strip() if len(lines) > 1 else full_text
 
-    data: dict = {"name": task_name, "notes": notes}
+    import datetime
+    data: dict = {
+        "name": task_name,
+        "notes": notes,
+        "assignee": "denis@synclab.pro",
+        "due_on": datetime.date.today().isoformat(),
+    }
     if project_id:
         data["projects"] = [project_id]
     else:
@@ -670,12 +676,25 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
             mail_result = await loop.run_in_executor(
                 None, lambda: mailer._run(to=to, subject=subject, body=body, send=True)
             )
+            LICENSE_SESSIONS[chat_id] = []
+            await update.message.reply_text(mail_result)
+        elif action == "send_both":
+            to = result.get("to", "")
+            subject = result.get("subject", "Запрос лицензии")
+            body = result.get("body", reply_text)
+            full_text = result.get("full_text", body)
+            await thinking_msg.edit_text(f"📧 Отправляю письмо на {to} и сохраняю в Asana…")
+            from syncoteca.tools.email_tool import EmailDraftTool
+            mailer = EmailDraftTool()
+            mail_result = await loop.run_in_executor(
+                None, lambda: mailer._run(to=to, subject=subject, body=body, send=True)
+            )
             asana_result = await loop.run_in_executor(None, save_to_asana, full_text)
             LICENSE_SESSIONS[chat_id] = []
             await update.message.reply_text(f"{mail_result}\n\n{asana_result}")
         elif action == "draft_ready":
             await thinking_msg.edit_text(
-                f"{reply_text}\n\n—\nОтправь правки, «добавь в Асану» или «отправляй» чтобы выслать письмо."
+                f"{reply_text}\n\n—\nКуда отправить?\n📧 «в почту» — только email\n📋 «в асану» — только Asana\n📧📋 «в оба» — email + Asana"
             )
         else:
             await thinking_msg.edit_text(reply_text)
