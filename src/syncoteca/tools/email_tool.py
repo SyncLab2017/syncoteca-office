@@ -13,7 +13,9 @@ EMAIL_SIGNATURE_TEXT = (
     "Денис Шарко | Denis Sharko\n"
     "Head of SYNC LAB | +7 919 760 7600\n"
     "Music Licensing, Supervision & Production\n\n"
-    "Sync Lab | NeoSounds Ltd | Sound Scape | Twisted Jukebox\n\n"
+    "Sync Lab | NeoSounds Ltd | Sound Scape | Twisted Jukebox | Сайт | Кинопоиск\n\n"
+    "Оставить отзыв | feedback here\n"
+    "Мы работаем в Контур.Диадок.\n\n"
     "---\n"
     "Содержимое этого электронного письма и все вложения являются КОНФИДЕНЦИАЛЬНЫМИ "
     "и могут быть защищены законом о защите персональных данных. Если вы не являетесь "
@@ -23,32 +25,28 @@ EMAIL_SIGNATURE_TEXT = (
     "The contents of this e-mail and any attachments are CONFIDENTIAL and may also be "
     "legally privileged. If you are not the intended recipient, you must not retain, copy "
     "or use this e-mail or any attachment for any purpose, nor disclose all or any part "
-    "of the contents to any person."
+    "of the contents to any other person."
 )
 
 EMAIL_SIGNATURE_HTML = """
 <br><br>
-<table cellpadding="0" cellspacing="0" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#333333;line-height:1.6;">
-  <tr><td style="color:#4a9ea1;padding-bottom:6px;">Best regards,</td></tr>
-  <tr><td style="padding-bottom:2px;"><strong style="color:#5c4a82;">Денис Шарко | Denis Sharko</strong></td></tr>
-  <tr><td style="padding-bottom:2px;">Head of SYNC LAB | +7 919 760 7600</td></tr>
-  <tr><td style="padding-bottom:14px;">Music Licensing, Supervision &amp; Production</td></tr>
-  <tr><td style="padding-bottom:14px;font-size:13px;">
-    <a href="https://synclab.pro" style="color:#5c4a82;font-weight:bold;text-decoration:none;">Sync Lab</a> |
-    <strong style="color:#5c4a82;">NeoSounds Ltd</strong> |
-    <strong style="color:#5c4a82;">Sound Scape</strong> |
-    <strong style="color:#5c4a82;">Twisted Jukebox</strong>
+<table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#333333;">
+  <tr><td style="padding-bottom:6px;color:#3DA8B4;">Best regards,</td></tr>
+  <tr><td style="padding-bottom:1px;color:#3DA8B4;font-weight:bold;">Денис Шарко | Denis Sharko</td></tr>
+  <tr><td style="padding-bottom:1px;color:#3DA8B4;">Head of SYNC LAB | +7 919 760 7600</td></tr>
+  <tr><td style="padding-bottom:16px;color:#3DA8B4;">Music Licensing, Supervision &amp; Production</td></tr>
+  <tr><td style="padding-bottom:14px;font-size:14px;">
+    <a href="https://synclab.sourceaudio.com/#!artists" style="color:#2B7FA6;font-weight:bold;text-decoration:none;">Sync Lab</a><span style="color:#555555;"> | </span><a href="https://www.neosounds.com/" style="color:#2B7FA6;font-weight:bold;text-decoration:none;">NeoSounds Ltd</a><span style="color:#555555;"> | </span><a href="https://soundscape.io/" style="color:#2B7FA6;font-weight:bold;text-decoration:none;">Sound Scape</a><span style="color:#555555;"> | </span><a href="https://www.twistedjukebox.com/" style="color:#CC3B7A;font-weight:bold;text-decoration:none;">Twisted Jukebox</a><span style="color:#555555;"> | </span><a href="https://synclab.pro/" style="color:#2B7FA6;font-weight:bold;text-decoration:none;">Сайт</a><span style="color:#555555;"> | </span><a href="https://www.kinopoisk.ru/name/6269377/" style="color:#B86D2A;font-weight:bold;text-decoration:none;">Кинопоиск</a>
   </td></tr>
-  <tr><td style="font-size:11px;color:#999999;border-top:1px solid #eeeeee;padding-top:10px;max-width:600px;">
-    Содержимое этого электронного письма и все вложения являются КОНФИДЕНЦИАЛЬНЫМИ
-    и могут быть защищены законом о защите персональных данных. Если вы не являетесь
-    адресатом, вам запрещается сохранять, копировать или использовать это электронное
-    письмо или вложения к нему в каких-либо целях, а также разглашать его содержание
-    полностью или частично.<br><br>
-    The contents of this e-mail and any attachments are CONFIDENTIAL and may also be
-    legally privileged. If you are not the intended recipient, you must not retain, copy
-    or use this e-mail or any attachment for any purpose, nor disclose all or any part
-    of the contents to any person.
+  <tr><td style="padding-bottom:2px;color:#3DA8B4;">
+    Оставить <a href="https://goo.gl/forms/iYHf5wKi5CBYHWtl1" style="color:#3DA8B4;text-decoration:underline;">отзыв</a> | feedback <a href="x-webdoc://6A875865-DF45-48B6-8AC1-CC74F2764D5F" style="color:#1155CC;text-decoration:underline;">here</a>
+  </td></tr>
+  <tr><td style="padding-bottom:16px;color:#3DA8B4;">
+    Мы работаем в <a href="https://kontur.ru/diadoc" style="color:#1155CC;text-decoration:underline;">Контур.Диадок</a>.
+  </td></tr>
+  <tr><td style="font-size:11px;color:#888888;border-top:1px solid #eeeeee;padding-top:10px;max-width:600px;">
+    Содержимое этого электронного письма и все вложения являются КОНФИДЕНЦИАЛЬНЫМИ и могут быть защищены законом о защите персональных данных. Если вы не являетесь адресатом, вам запрещается сохранять, копировать или использовать это электронное письмо или вложения к нему в каких-либо целях, а также разглашать его содержание полностью или частично.<br><br>
+    The contents of this e-mail and any attachments are CONFIDENTIAL and may also be legally privileged. If you are not the intended recipient, you must not retain, copy or use this e-mail or any attachment for any purpose, nor disclose all or any part of the contents to any other person.
   </td></tr>
 </table>"""
 
