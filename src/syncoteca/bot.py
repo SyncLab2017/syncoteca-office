@@ -616,7 +616,29 @@ def run_coordinator(chat_id: int, message: str) -> dict:
 
     try:
         clean = re.sub(r"```json|```", "", text).strip()
-        return json.loads(clean)
+        # Haiku sometimes outputs multiple JSON objects; extract all, pick the best
+        import re as _re
+        objects = []
+        depth = 0
+        start = None
+        for i, ch in enumerate(clean):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}" and depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    try:
+                        objects.append(json.loads(clean[start:i+1]))
+                    except Exception:
+                        pass
+        if not objects:
+            return {"action": "reply", "text": text}
+        # Prefer action-bearing objects over plain replies
+        priority = {"asana_task": 0, "calendar": 1, "search": 2, "route": 3, "reply": 4}
+        objects.sort(key=lambda o: priority.get(o.get("action", "reply"), 5))
+        return objects[0]
     except Exception:
         return {"action": "reply", "text": text}
 
