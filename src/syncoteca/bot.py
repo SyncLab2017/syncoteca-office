@@ -647,9 +647,23 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
             asana_result = await loop.run_in_executor(None, save_to_asana, full_text)
             LICENSE_SESSIONS[chat_id] = []
             await update.message.reply_text(asana_result)
+        elif action == "send_email":
+            to = result.get("to", "")
+            subject = result.get("subject", "Запрос лицензии")
+            body = result.get("body", reply_text)
+            full_text = result.get("full_text", body)
+            await thinking_msg.edit_text(f"📧 Отправляю письмо на {to}…")
+            from syncoteca.tools.email_tool import EmailDraftTool
+            mailer = EmailDraftTool()
+            mail_result = await loop.run_in_executor(
+                None, lambda: mailer._run(to=to, subject=subject, body=body, send=True)
+            )
+            asana_result = await loop.run_in_executor(None, save_to_asana, full_text)
+            LICENSE_SESSIONS[chat_id] = []
+            await update.message.reply_text(f"{mail_result}\n\n{asana_result}")
         elif action == "draft_ready":
             await thinking_msg.edit_text(
-                f"{reply_text}\n\n—\nОтправь правки или напиши «добавь в Асану» чтобы создать задачу."
+                f"{reply_text}\n\n—\nОтправь правки, «добавь в Асану» или «отправляй» чтобы выслать письмо."
             )
         else:
             await thinking_msg.edit_text(reply_text)

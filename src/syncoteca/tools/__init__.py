@@ -7,6 +7,7 @@ from .metadata_tool import MetadataTool
 from .supabase_tool import SupabaseTool
 from .google_calendar_tool import GoogleCalendarTool
 from .web_search_tool import WebSearchTool
+from .asana_search_tool import AsanaSearchTool
 
 __all__ = [
     "SearchRightsHolderTool",
@@ -18,4 +19,5 @@ __all__ = [
     "SupabaseTool",
     "GoogleCalendarTool",
     "WebSearchTool",
+    "AsanaSearchTool",
 ]

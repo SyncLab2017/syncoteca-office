@@ -42,6 +42,7 @@ from .tools import (
     RoyaltyCalculatorTool,
     MetadataTool,
     SupabaseTool,
+    AsanaSearchTool,
 )
 
 load_dotenv(override=True)
@@ -89,6 +90,7 @@ class SyncotecaCrew:
     _royalty = RoyaltyCalculatorTool()
     _metadata = MetadataTool()
     _synclab = SupabaseTool()
+    _asana_search = AsanaSearchTool()
 
     # --- Agents ---
 
@@ -108,7 +110,7 @@ class SyncotecaCrew:
         return Agent(
             config=cfg,
             llm=make_sonnet(),
-            tools=[self._synclab, self._search, self._email, self._db],
+            tools=[self._synclab, self._search, self._email, self._db, self._asana_search],
             memory=True,
             verbose=True,
             step_callback=_make_step_callback("ekaterina"),
