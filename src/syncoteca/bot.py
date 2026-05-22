@@ -1076,6 +1076,14 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
                 ),
             )
             await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{cal_result}")
+        elif action == "asana_task":
+            title = result.get("title", text[:80])
+            notes = result.get("notes", text)
+            await thinking_msg.edit_text("📋 Создаю задачу в Asana…")
+            asana_result = await loop.run_in_executor(
+                None, save_to_asana, notes, title
+            )
+            await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{asana_result}")
         elif action == "search":
             query = result.get("query", text)
             await thinking_msg.edit_text(f"🔍 Ищу: {query}…")
