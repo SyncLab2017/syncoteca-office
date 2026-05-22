@@ -243,9 +243,25 @@ _SEARCH_STOP_WORDS = {
     "пожалуйста", "мне", "нужны", "нужен", "нужна", "как", "ли", "по", "в", "на",
     "для", "из", "с", "и", "или", "а", "но", "что", "это", "тоже", "еще", "ещё",
     "лейбл", "лейблу", "лейбла", "лейблов", "правообладатель", "правообладателя",
-    "издательство", "издательства", "издательстве", "по", "у", "мне", "me",
+    "издательство", "издательства", "издательстве", "у", "me", "дай",
     "find", "search", "contacts", "contact", "the", "a", "an", "of", "for",
 }
+
+_RU_VOWELS = set("аеёиоуыэюя")
+_RU_ENDINGS = set("аеёиоуыэюяйь")
+
+
+def _stem_ru(term: str) -> list[str]:
+    """Return term + stemmed variants by removing Russian inflection endings."""
+    variants = [term]
+    if len(term) < 4:
+        return variants
+    if term[-1] in _RU_ENDINGS:
+        s1 = term[:-1]
+        variants.append(s1)
+        if len(s1) >= 4 and s1[-1] in _RU_ENDINGS:
+            variants.append(s1[:-1])
+    return variants
 
 
 def _extract_search_terms(text: str) -> list[str]:
@@ -266,9 +282,14 @@ def search_supabase_contacts(query: str) -> str:
         if not terms:
             terms = [query.strip()]
 
-        # Build OR filter: each term searched across all relevant columns
-        conditions = []
+        # Expand each term with Russian stem variants to handle inflection
+        all_terms: list[str] = []
         for term in terms[:6]:
+            all_terms.extend(_stem_ru(term))
+
+        # Build OR filter: each term/variant searched across all relevant columns
+        conditions = []
+        for term in all_terms[:18]:
             t = term.replace("*", "").replace("(", "").replace(")", "")
             for col in ("owner_type", "first_name", "last_name", "email", "adittional_info"):
                 conditions.append(f"{col}.ilike.*{t}*")
@@ -318,11 +339,13 @@ def search_asana_contacts(query: str) -> str:
     if not token:
         return ""
     try:
+        terms = _extract_search_terms(query)
+        asana_query = " ".join(terms) if terms else query.strip()
         resp = httpx.get(
             f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/tasks/search",
             headers={"Authorization": f"Bearer {token}"},
             params={
-                "text": query,
+                "text": asana_query,
                 "opt_fields": "name,notes,permalink_url",
                 "limit": 5,
             },
