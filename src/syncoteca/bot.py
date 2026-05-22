@@ -830,6 +830,7 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
             label = AGENT_LABELS.get(agent_name, agent_name)
             await thinking_msg.edit_text(f"🔀 → {label}")
             if agent_name == "license_manager":
+                ACTIVE_AGENT[chat_id] = "license_manager"
                 LICENSE_SESSIONS[chat_id] = []
                 await _dispatch_license(update, task)
             else:

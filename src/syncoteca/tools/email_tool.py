@@ -30,21 +30,21 @@ EMAIL_SIGNATURE_TEXT = (
 
 EMAIL_SIGNATURE_HTML = """
 <br><br>
-<table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#333333;">
-  <tr><td style="padding-bottom:6px;color:#3DA8B4;">Best regards,</td></tr>
-  <tr><td style="padding-bottom:1px;color:#3DA8B4;font-weight:bold;">Денис Шарко | Denis Sharko</td></tr>
-  <tr><td style="padding-bottom:1px;color:#3DA8B4;">Head of SYNC LAB | +7 919 760 7600</td></tr>
-  <tr><td style="padding-bottom:16px;color:#3DA8B4;">Music Licensing, Supervision &amp; Production</td></tr>
-  <tr><td style="padding-bottom:14px;font-size:14px;">
-    <a href="https://synclab.sourceaudio.com/#!artists" style="color:#2B7FA6;font-weight:bold;text-decoration:none;">Sync Lab</a><span style="color:#555555;"> | </span><a href="https://www.neosounds.com/" style="color:#2B7FA6;font-weight:bold;text-decoration:none;">NeoSounds Ltd</a><span style="color:#555555;"> | </span><a href="https://soundscape.io/" style="color:#2B7FA6;font-weight:bold;text-decoration:none;">Sound Scape</a><span style="color:#555555;"> | </span><a href="https://www.twistedjukebox.com/" style="color:#CC3B7A;font-weight:bold;text-decoration:none;">Twisted Jukebox</a><span style="color:#555555;"> | </span><a href="https://synclab.pro/" style="color:#2B7FA6;font-weight:bold;text-decoration:none;">Сайт</a><span style="color:#555555;"> | </span><a href="https://www.kinopoisk.ru/name/6269377/" style="color:#B86D2A;font-weight:bold;text-decoration:none;">Кинопоиск</a>
+<table cellpadding="0" cellspacing="0" border="0" style="font-family:'Montserrat',Helvetica,Arial,sans-serif;font-size:12px;line-height:1.6;color:#333333;">
+  <tr><td style="padding-bottom:4px;color:#2bb4d7;">Best regards,&nbsp;</td></tr>
+  <tr><td style="padding-bottom:1px;color:#2bb4d7;">Денис Шарко | Denis Sharko</td></tr>
+  <tr><td style="padding-bottom:1px;color:#2bb4d7;">Head of SYNC LAB | +7 919 760 7600</td></tr>
+  <tr><td style="padding-bottom:14px;color:#2eb6d7;">Music Licensing, Supervision &amp; Production</td></tr>
+  <tr><td style="padding-bottom:14px;font-size:12px;font-weight:bold;">
+    <a href="https://synclab.sourceaudio.com/#!artists" style="color:#0068da;font-weight:bold;text-decoration:none;">Sync Lab</a><font color="#0068da"> | </font><a href="https://www.neosounds.com/" style="color:#008f00;font-weight:bold;text-decoration:none;">NeoSounds Ltd</a><font color="#0068da"> | </font><a href="https://soundscape.io/" style="color:#942192;font-weight:bold;text-decoration:none;">Sound Scape</a><font color="#0068da"> | </font><a href="https://www.twistedjukebox.com" style="color:#ff40ff;font-weight:bold;text-decoration:none;">Twisted Jukebox</a><font color="#0068da"> |</font><br><a href="https://synclab.pro/" style="color:#000000;font-weight:bold;text-decoration:none;">Сайт</a><font color="#0068da"> | </font><a href="https://www.kinopoisk.ru/name/6269377/" style="color:#e61e1c;font-weight:bold;text-decoration:none;">Кинопоиск</a>
   </td></tr>
-  <tr><td style="padding-bottom:2px;color:#3DA8B4;">
-    Оставить <a href="https://goo.gl/forms/iYHf5wKi5CBYHWtl1" style="color:#3DA8B4;text-decoration:underline;">отзыв</a> | feedback <a href="x-webdoc://6A875865-DF45-48B6-8AC1-CC74F2764D5F" style="color:#1155CC;text-decoration:underline;">here</a>
+  <tr><td style="padding-bottom:2px;">
+    <font color="#2bb4d7">Оставить&nbsp;</font><a href="https://goo.gl/forms/iYHf5wKi5CBYHWtl1" style="color:#2bb4d7;text-decoration:underline;">отзыв</a><font color="#2bb4d7"> | feedback</font>&nbsp;<a href="x-webdoc://6A875865-DF45-48B6-8AC1-CC74F2764D5F" style="color:#0068da;text-decoration:underline;">here</a>
   </td></tr>
-  <tr><td style="padding-bottom:16px;color:#3DA8B4;">
-    Мы работаем в <a href="https://kontur.ru/diadoc" style="color:#1155CC;text-decoration:underline;">Контур.Диадок</a>.
+  <tr><td style="padding-bottom:16px;color:#2eb6d7;">
+    Мы работаем в <a href="https://kontur.ru/diadoc" target="_blank" style="color:#0068da;text-decoration:underline;">Контур.Диадок</a>.
   </td></tr>
-  <tr><td style="font-size:11px;color:#888888;border-top:1px solid #eeeeee;padding-top:10px;max-width:600px;">
+  <tr><td style="font-size:11px;color:#5e5e5e;border-top:1px solid #eeeeee;padding-top:10px;max-width:600px;">
     Содержимое этого электронного письма и все вложения являются КОНФИДЕНЦИАЛЬНЫМИ и могут быть защищены законом о защите персональных данных. Если вы не являетесь адресатом, вам запрещается сохранять, копировать или использовать это электронное письмо или вложения к нему в каких-либо целях, а также разглашать его содержание полностью или частично.<br><br>
     The contents of this e-mail and any attachments are CONFIDENTIAL and may also be legally privileged. If you are not the intended recipient, you must not retain, copy or use this e-mail or any attachment for any purpose, nor disclose all or any part of the contents to any other person.
   </td></tr>
