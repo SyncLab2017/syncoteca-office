@@ -204,7 +204,7 @@ def run_license_dialogue(chat_id: int, user_message: str) -> dict:
     return {"action": "continue_dialogue", "reply_text": assistant_text}
 
 
-def save_to_asana(full_text: str) -> str:
+def save_to_asana(full_text: str, task_name: str = "") -> str:
     """Create Asana task from license request draft. Returns task URL or error."""
     import httpx
     token = os.getenv("ASANA_TOKEN", "")
@@ -216,7 +216,8 @@ def save_to_asana(full_text: str) -> str:
         return "⚠️ Укажи ASANA_PROJECT_ID или ASANA_WORKSPACE_ID в переменных Railway"
 
     lines = full_text.strip().splitlines()
-    task_name = lines[0].replace("ПРОЕКТ ЗАДАЧИ:", "").strip().strip("«»") if lines else "Запрос лицензии"
+    if not task_name:
+        task_name = lines[0].replace("ПРОЕКТ ЗАДАЧИ:", "").strip().strip("«»") if lines else "Запрос лицензии"
     notes = "\n".join(lines[1:]).strip() if len(lines) > 1 else full_text
 
     import datetime
@@ -661,8 +662,9 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
 
         if action == "save_to_asana":
             full_text = result.get("full_text", reply_text)
+            subject = result.get("subject", "")
             await thinking_msg.edit_text(f"{full_text}\n\nСохраняю в Asana…")
-            asana_result = await loop.run_in_executor(None, save_to_asana, full_text)
+            asana_result = await loop.run_in_executor(None, save_to_asana, full_text, subject)
             LICENSE_SESSIONS[chat_id] = []
             await update.message.reply_text(asana_result)
         elif action == "send_email":
@@ -689,7 +691,7 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
             mail_result = await loop.run_in_executor(
                 None, lambda: mailer._run(to=to, subject=subject, body=body, send=True)
             )
-            asana_result = await loop.run_in_executor(None, save_to_asana, full_text)
+            asana_result = await loop.run_in_executor(None, save_to_asana, full_text, subject)
             LICENSE_SESSIONS[chat_id] = []
             await update.message.reply_text(f"{mail_result}\n\n{asana_result}")
         elif action == "draft_ready":
