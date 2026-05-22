@@ -660,25 +660,32 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
         action = result.get("action", "continue_dialogue")
         reply_text = result.get("reply_text", "")
 
+        _SEND_CHOICE = "\n\n—\nКуда отправить?\n📧 «в почту» — только email\n📋 «в асану» — только Asana\n📧📋 «в оба» — email + Asana"
+        _MAX = 4000
+
+        async def _edit_split(msg, text: str) -> None:
+            """Edit msg with first 4000 chars, send overflow as new messages."""
+            chunks = [text[i:i + _MAX] for i in range(0, len(text), _MAX)]
+            await msg.edit_text(chunks[0])
+            for chunk in chunks[1:]:
+                await update.message.reply_text(chunk)
+
         if action == "save_to_asana":
             full_text = result.get("full_text", reply_text)
             subject = result.get("subject", "")
-            await thinking_msg.edit_text(f"{full_text}\n\nСохраняю в Asana…")
+            await thinking_msg.edit_text(f"📋 Сохраняю в Asana: {subject or 'задача'}…")
             asana_result = await loop.run_in_executor(None, save_to_asana, full_text, subject)
-            LICENSE_SESSIONS[chat_id] = []
             await update.message.reply_text(asana_result)
         elif action == "send_email":
             to = result.get("to", "")
             subject = result.get("subject", "Запрос лицензии")
             body = result.get("body", reply_text)
-            full_text = result.get("full_text", body)
             await thinking_msg.edit_text(f"📧 Отправляю письмо на {to}…")
             from syncoteca.tools.email_tool import EmailDraftTool
             mailer = EmailDraftTool()
             mail_result = await loop.run_in_executor(
                 None, lambda: mailer._run(to=to, subject=subject, body=body, send=True)
             )
-            LICENSE_SESSIONS[chat_id] = []
             await update.message.reply_text(mail_result)
         elif action == "send_both":
             to = result.get("to", "")
@@ -692,14 +699,19 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
                 None, lambda: mailer._run(to=to, subject=subject, body=body, send=True)
             )
             asana_result = await loop.run_in_executor(None, save_to_asana, full_text, subject)
-            LICENSE_SESSIONS[chat_id] = []
             await update.message.reply_text(f"{mail_result}\n\n{asana_result}")
         elif action == "draft_ready":
-            await thinking_msg.edit_text(
-                f"{reply_text}\n\n—\nКуда отправить?\n📧 «в почту» — только email\n📋 «в асану» — только Asana\n📧📋 «в оба» — email + Asana"
-            )
+            full = reply_text + _SEND_CHOICE
+            if len(full) <= _MAX:
+                await thinking_msg.edit_text(full)
+            else:
+                chunks = [reply_text[i:i + _MAX] for i in range(0, len(reply_text), _MAX)]
+                await thinking_msg.edit_text(chunks[0])
+                for chunk in chunks[1:]:
+                    await update.message.reply_text(chunk)
+                await update.message.reply_text(_SEND_CHOICE)
         else:
-            await thinking_msg.edit_text(reply_text)
+            await _edit_split(thinking_msg, reply_text)
 
     except Exception as e:
         logger.exception("License dialogue error")
