@@ -201,31 +201,33 @@ def save_to_asana(full_text: str) -> str:
     import httpx
     token = os.getenv("ASANA_TOKEN", "")
     project_id = os.getenv("ASANA_PROJECT_ID", "")
-    if not token or not project_id:
-        return "⚠️ ASANA_TOKEN или ASANA_PROJECT_ID не настроены в .env"
+    workspace_id = os.getenv("ASANA_WORKSPACE_ID", "")
+    if not token:
+        return "⚠️ ASANA_TOKEN не настроен"
+    if not project_id and not workspace_id:
+        return "⚠️ Укажи ASANA_PROJECT_ID или ASANA_WORKSPACE_ID в переменных Railway"
 
     lines = full_text.strip().splitlines()
     task_name = lines[0].replace("ПРОЕКТ ЗАДАЧИ:", "").strip().strip("«»") if lines else "Запрос лицензии"
     notes = "\n".join(lines[1:]).strip() if len(lines) > 1 else full_text
 
-    payload = {
-        "data": {
-            "name": task_name,
-            "notes": notes,
-            "projects": [project_id],
-            "assignee": os.getenv("ASANA_ASSIGNEE", "me"),
-        }
-    }
+    data: dict = {"name": task_name, "notes": notes}
+    if project_id:
+        data["projects"] = [project_id]
+    else:
+        data["workspace"] = workspace_id
+
     try:
         resp = httpx.post(
             "https://app.asana.com/api/1.0/tasks",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json=payload,
+            json={"data": data},
             timeout=15,
         )
         resp.raise_for_status()
         task_id = resp.json()["data"]["gid"]
-        return f"✅ Закинул в Asana 👍\nhttps://app.asana.com/0/{project_id}/{task_id}"
+        link = f"https://app.asana.com/0/{project_id}/{task_id}" if project_id else f"https://app.asana.com/0/{workspace_id}/{task_id}"
+        return f"✅ Задача в Asana 👍\n{link}"
     except Exception as e:
         return f"❌ Ошибка Asana: {e}"
 
