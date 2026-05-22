@@ -169,8 +169,57 @@ async def download_and_transcribe(update: Update) -> str | None:
 LICENSE_SYSTEM_PROMPT = _load_prompt("ekaterina")
 
 
+def search_supabase_contacts(query: str) -> str:
+    """Search Supabase contacts table for rights holders. Returns formatted context or ''."""
+    import httpx
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not base or not key:
+        return ""
+    try:
+        q = query.replace("*", "").replace("(", "").replace(")", "")
+        or_filter = (
+            f"(first_name.ilike.*{q}*,"
+            f"last_name.ilike.*{q}*,"
+            f"email.ilike.*{q}*,"
+            f"owner_type.ilike.*{q}*,"
+            f"adittional_info.ilike.*{q}*)"
+        )
+        resp = httpx.get(
+            f"{base}/rest/v1/contacts",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            params={"or": or_filter, "limit": "10"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if not rows:
+            return ""
+        lines = ["[КОНТАКТЫ ИЗ БАЗЫ ДАННЫХ SYNC LAB (592 контакта — используй эти данные, не придумывай):"]
+        for r in rows:
+            first = r.get("first_name") or ""
+            last = r.get("last_name") or ""
+            name = f"{first} {last}".strip()
+            owner = r.get("owner_type") or ""
+            email = r.get("email") or ""
+            role = r.get("adittional_info") or ""
+            parts = [f"• {owner}"]
+            if name:
+                parts.append(name)
+            if role:
+                parts.append(f"({role})")
+            if email:
+                parts.append(f"| email: {email}")
+            lines.append("  ".join(parts))
+        lines.append("]")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"Supabase search error: {e}")
+        return ""
+
+
 def search_asana_contacts(query: str) -> str:
-    """Search Asana workspace tasks for rights-holder contacts. Returns formatted context or ''."""
+    """Search Asana workspace tasks for rights-holder deal history. Returns formatted context or ''."""
     import httpx
     token = os.getenv("ASANA_TOKEN", "")
     workspace_id = os.getenv("ASANA_WORKSPACE_ID", "331121027676371")
@@ -191,7 +240,7 @@ def search_asana_contacts(query: str) -> str:
         tasks = resp.json().get("data", [])
         if not tasks:
             return ""
-        lines = ["[КОНТАКТЫ ИЗ БАЗЫ ДАННЫХ ASANA (используй эти данные, не придумывай):"]
+        lines = ["[ИСТОРИЯ СДЕЛОК ИЗ ASANA (используй эти данные):"]
         for t in tasks:
             lines.append(f"• {t.get('name', '—')}")
             if notes := (t.get("notes") or "").strip():
@@ -688,8 +737,12 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
     try:
         loop = asyncio.get_event_loop()
 
-        # Inject real Asana contacts before calling LLM
-        db_context = await loop.run_in_executor(None, search_asana_contacts, user_request)
+        # Search Supabase + Asana in parallel, inject real contacts before LLM
+        sb_ctx, asana_ctx = await asyncio.gather(
+            loop.run_in_executor(None, search_supabase_contacts, user_request),
+            loop.run_in_executor(None, search_asana_contacts, user_request),
+        )
+        db_context = "\n\n".join(c for c in [sb_ctx, asana_ctx] if c)
         enriched = f"{db_context}\n\n{user_request}" if db_context else user_request
 
         result = await loop.run_in_executor(
