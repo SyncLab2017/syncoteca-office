@@ -179,7 +179,7 @@ def run_license_dialogue(chat_id: int, user_message: str) -> dict:
     history.append({"role": "user", "content": user_message})
 
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-sonnet-4-6",
         max_tokens=2048,
         system=LICENSE_SYSTEM_PROMPT,
         messages=history,
@@ -189,11 +189,19 @@ def run_license_dialogue(chat_id: int, user_message: str) -> dict:
     history.append({"role": "assistant", "content": assistant_text})
     LICENSE_SESSIONS[chat_id] = history[-20:]
 
-    try:
-        clean = re.sub(r"```json|```", "", assistant_text).strip()
-        return json.loads(clean)
-    except Exception:
-        return {"action": "continue_dialogue", "reply_text": assistant_text}
+    # Try full text first, then extract first JSON object from anywhere in text
+    for candidate in [
+        re.sub(r"```json|```", "", assistant_text).strip(),
+        *re.findall(r'\{[\s\S]*?\}(?=\s*$|\s*\n\s*[^{])', assistant_text),
+        *(m.group() for m in [re.search(r'\{[\s\S]+\}', assistant_text)] if m),
+    ]:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict) and "action" in parsed:
+                return parsed
+        except Exception:
+            continue
+    return {"action": "continue_dialogue", "reply_text": assistant_text}
 
 
 def save_to_asana(full_text: str) -> str:
