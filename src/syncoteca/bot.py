@@ -100,6 +100,75 @@ ACTIVE_AGENT: dict[int, str] = {}
 # Coordinator dialogue history
 COORDINATOR_SESSIONS: dict[int, list[dict]] = defaultdict(list)
 
+
+def _persist_active_agent(chat_id: int, agent_name: str) -> None:
+    """Save sticky agent to Supabase so it survives Railway restarts."""
+    import httpx
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not base or not key:
+        return
+    try:
+        httpx.post(
+            f"{base}/rest/v1/agent_sessions",
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates",
+            },
+            json={
+                "session_id": f"sticky_{chat_id}",
+                "agent_name": agent_name,
+                "messages": [],
+                "task_context": {"sticky": True, "chat_id": chat_id},
+            },
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
+def _restore_active_agent(chat_id: int) -> str | None:
+    """Restore sticky agent from Supabase after restart. Returns agent name or None."""
+    import httpx
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not base or not key:
+        return None
+    try:
+        resp = httpx.get(
+            f"{base}/rest/v1/agent_sessions",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            params={"session_id": f"eq.sticky_{chat_id}", "limit": "1"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if rows:
+            return rows[0].get("agent_name")
+    except Exception:
+        pass
+    return None
+
+
+def _clear_active_agent(chat_id: int) -> None:
+    """Remove sticky agent from Supabase."""
+    import httpx
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not base or not key:
+        return
+    try:
+        httpx.delete(
+            f"{base}/rest/v1/agent_sessions",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            params={"session_id": f"eq.sticky_{chat_id}"},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
 # Direct agent dialogue sessions (not CrewAI)
 DIRECT_SESSIONS: dict[str, dict[int, list[dict]]] = defaultdict(lambda: defaultdict(list))
 
@@ -169,33 +238,55 @@ async def download_and_transcribe(update: Update) -> str | None:
 LICENSE_SYSTEM_PROMPT = _load_prompt("ekaterina")
 
 
+_SEARCH_STOP_WORDS = {
+    "найди", "ищи", "поищи", "ищу", "контакты", "контакт", "есть", "нас", "там",
+    "пожалуйста", "мне", "нужны", "нужен", "нужна", "как", "ли", "по", "в", "на",
+    "для", "из", "с", "и", "или", "а", "но", "что", "это", "тоже", "еще", "ещё",
+    "лейбл", "лейблу", "лейбла", "лейблов", "правообладатель", "правообладателя",
+    "издательство", "издательства", "издательстве", "по", "у", "мне", "me",
+    "find", "search", "contacts", "contact", "the", "a", "an", "of", "for",
+}
+
+
+def _extract_search_terms(text: str) -> list[str]:
+    """Extract meaningful search terms, removing Russian/English stop words."""
+    words = [w.strip(".,!?:;'\"()[]").lower() for w in text.split()]
+    return [w for w in words if len(w) > 2 and w not in _SEARCH_STOP_WORDS]
+
+
 def search_supabase_contacts(query: str) -> str:
-    """Search Supabase contacts table for rights holders. Returns formatted context or ''."""
+    """Search Supabase contacts by individual terms (ilike per word). Returns formatted context or ''."""
     import httpx
     base = os.getenv("SUPABASE_URL", "").rstrip("/")
     key = os.getenv("SUPABASE_KEY", "")
     if not base or not key:
         return ""
     try:
-        q = query.replace("*", "").replace("(", "").replace(")", "")
-        or_filter = (
-            f"(first_name.ilike.*{q}*,"
-            f"last_name.ilike.*{q}*,"
-            f"email.ilike.*{q}*,"
-            f"owner_type.ilike.*{q}*,"
-            f"adittional_info.ilike.*{q}*)"
-        )
+        terms = _extract_search_terms(query)
+        if not terms:
+            terms = [query.strip()]
+
+        # Build OR filter: each term searched across all relevant columns
+        conditions = []
+        for term in terms[:6]:
+            t = term.replace("*", "").replace("(", "").replace(")", "")
+            for col in ("owner_type", "first_name", "last_name", "email", "adittional_info"):
+                conditions.append(f"{col}.ilike.*{t}*")
+
+        or_filter = f"({','.join(conditions)})"
         resp = httpx.get(
             f"{base}/rest/v1/contacts",
             headers={"apikey": key, "Authorization": f"Bearer {key}"},
-            params={"or": or_filter, "limit": "10"},
+            params={"or": or_filter, "limit": "15"},
             timeout=10,
         )
         resp.raise_for_status()
         rows = resp.json()
         if not rows:
             return ""
-        lines = ["[КОНТАКТЫ ИЗ БАЗЫ ДАННЫХ SYNC LAB (592 контакта — используй эти данные, не придумывай):"]
+
+        lines = ["[КОНТАКТЫ ИЗ БАЗЫ ДАННЫХ SYNC LAB (используй эти данные, не придумывай):"]
+        seen_owners: set[str] = set()
         for r in rows:
             first = r.get("first_name") or ""
             last = r.get("last_name") or ""
@@ -205,12 +296,13 @@ def search_supabase_contacts(query: str) -> str:
             role = r.get("adittional_info") or ""
             parts = [f"• {owner}"]
             if name:
-                parts.append(name)
+                parts.append(f"— {name}")
             if role:
                 parts.append(f"({role})")
             if email:
-                parts.append(f"| email: {email}")
-            lines.append("  ".join(parts))
+                parts.append(f"| {email}")
+            lines.append(" ".join(parts))
+            seen_owners.add(owner)
         lines.append("]")
         return "\n".join(lines)
     except Exception as e:
@@ -605,6 +697,7 @@ async def handle_slash_agent(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = update.effective_chat.id
     TEACH_SESSIONS.pop(chat_id, None)
     ACTIVE_AGENT[chat_id] = agent_name
+    _persist_active_agent(chat_id, agent_name)
     # Clear Ekaterina's history when switching to another agent
     if agent_name != "license_manager":
         LICENSE_SESSIONS[chat_id] = []
@@ -862,6 +955,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _save_to_memory(TEACH_SESSIONS[chat_id], text, update)
         return
 
+    # Restore sticky agent from Supabase after Railway restart
+    if chat_id not in ACTIVE_AGENT:
+        loop = asyncio.get_event_loop()
+        restored = await loop.run_in_executor(None, _restore_active_agent, chat_id)
+        if restored:
+            ACTIVE_AGENT[chat_id] = restored
+
     # Sticky agent takes priority over license session history
     if chat_id in ACTIVE_AGENT:
         agent_name = ACTIVE_AGENT[chat_id]
@@ -890,6 +990,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if chat_id in TEACH_SESSIONS:
         await _save_to_memory(TEACH_SESSIONS[chat_id], text, update)
         return
+
+    # Restore sticky agent from Supabase after Railway restart
+    if chat_id not in ACTIVE_AGENT:
+        loop = asyncio.get_event_loop()
+        restored = await loop.run_in_executor(None, _restore_active_agent, chat_id)
+        if restored:
+            ACTIVE_AGENT[chat_id] = restored
 
     # Sticky agent takes priority over license session history
     if chat_id in ACTIVE_AGENT:
@@ -923,6 +1030,7 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
             await thinking_msg.edit_text(f"🔀 → {label}")
             if agent_name == "license_manager":
                 ACTIVE_AGENT[chat_id] = "license_manager"
+                _persist_active_agent(chat_id, "license_manager")
                 LICENSE_SESSIONS[chat_id] = []
                 await _dispatch_license(update, task)
             else:
@@ -967,6 +1075,7 @@ async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return await _deny(update)
     chat_id = update.effective_chat.id
     ACTIVE_AGENT.pop(chat_id, None)
+    _clear_active_agent(chat_id)
     LICENSE_SESSIONS[chat_id] = []
     await update.message.reply_text("🎯 Вернулся к координатору. Пиши задачу.")
 
