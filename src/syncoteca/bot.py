@@ -169,6 +169,40 @@ async def download_and_transcribe(update: Update) -> str | None:
 LICENSE_SYSTEM_PROMPT = _load_prompt("ekaterina")
 
 
+def search_asana_contacts(query: str) -> str:
+    """Search Asana workspace tasks for rights-holder contacts. Returns formatted context or ''."""
+    import httpx
+    token = os.getenv("ASANA_TOKEN", "")
+    workspace_id = os.getenv("ASANA_WORKSPACE_ID", "331121027676371")
+    if not token:
+        return ""
+    try:
+        resp = httpx.get(
+            f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/tasks/search",
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "text": query,
+                "opt_fields": "name,notes,permalink_url",
+                "limit": 5,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        tasks = resp.json().get("data", [])
+        if not tasks:
+            return ""
+        lines = ["[КОНТАКТЫ ИЗ БАЗЫ ДАННЫХ ASANA (используй эти данные, не придумывай):"]
+        for t in tasks:
+            lines.append(f"• {t.get('name', '—')}")
+            if notes := (t.get("notes") or "").strip():
+                lines.append(f"  {notes[:500]}")
+        lines.append("]")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"Asana search error: {e}")
+        return ""
+
+
 def run_license_dialogue(chat_id: int, user_message: str) -> dict:
     """Direct Anthropic API call with conversation history for Екатерина."""
     import anthropic
@@ -653,8 +687,13 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
 
     try:
         loop = asyncio.get_event_loop()
+
+        # Inject real Asana contacts before calling LLM
+        db_context = await loop.run_in_executor(None, search_asana_contacts, user_request)
+        enriched = f"{db_context}\n\n{user_request}" if db_context else user_request
+
         result = await loop.run_in_executor(
-            None, run_license_dialogue, chat_id, user_request
+            None, run_license_dialogue, chat_id, enriched
         )
 
         action = result.get("action", "continue_dialogue")
