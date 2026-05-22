@@ -209,7 +209,7 @@ def save_to_asana(full_text: str) -> str:
     import httpx
     token = os.getenv("ASANA_TOKEN", "")
     project_id = os.getenv("ASANA_PROJECT_ID", "")
-    workspace_id = os.getenv("ASANA_WORKSPACE_ID", "")
+    workspace_id = os.getenv("ASANA_WORKSPACE_ID", "331121027676371")
     if not token:
         return "⚠️ ASANA_TOKEN не настроен"
     if not project_id and not workspace_id:
@@ -236,6 +236,8 @@ def save_to_asana(full_text: str) -> str:
         task_id = resp.json()["data"]["gid"]
         link = f"https://app.asana.com/0/{project_id}/{task_id}" if project_id else f"https://app.asana.com/0/{workspace_id}/{task_id}"
         return f"✅ Задача в Asana 👍\n{link}"
+    except httpx.HTTPStatusError as e:
+        return f"❌ Ошибка Asana {e.response.status_code}: {e.response.text[:400]}"
     except Exception as e:
         return f"❌ Ошибка Asana: {e}"
 
