@@ -60,8 +60,11 @@ class GoogleCalendarTool(BaseTool):
             "start": {"dateTime": start_dt.isoformat(), "timeZone": "Europe/Moscow"},
             "end": {"dateTime": end_dt.isoformat(), "timeZone": "Europe/Moscow"},
         }
-        if attendees:
-            event["attendees"] = [{"email": e} for e in attendees]
+        import re as _re
+        _email_re = _re.compile(r'^[a-zA-Z0-9_.+\-]+@[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}$')
+        valid_attendees = [e for e in (attendees or []) if isinstance(e, str) and _email_re.match(e)]
+        if valid_attendees:
+            event["attendees"] = [{"email": e} for e in valid_attendees]
 
         calendar_id = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
         created = service.events().insert(calendarId=calendar_id, body=event).execute()
