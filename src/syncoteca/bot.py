@@ -877,12 +877,17 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
     try:
         loop = asyncio.get_event_loop()
 
-        # Search Supabase + Asana in parallel, inject real contacts before LLM
-        sb_ctx, asana_ctx = await asyncio.gather(
+        # Search Supabase + Asana + Tavily in parallel, inject context before LLM
+        from syncoteca.tools.tavily_search_tool import TavilySearchTool
+        _tavily = TavilySearchTool()
+        sb_ctx, asana_ctx, web_ctx = await asyncio.gather(
             loop.run_in_executor(None, search_supabase_contacts, user_request),
             loop.run_in_executor(None, search_asana_contacts, user_request),
+            loop.run_in_executor(None, _tavily._run, user_request),
         )
-        db_context = "\n\n".join(c for c in [sb_ctx, asana_ctx] if c)
+        if web_ctx:
+            web_ctx = f"[ВЕБ-ПОИСК (используй для контекста о бренде/треке/исполнителе):\n{web_ctx}\n]"
+        db_context = "\n\n".join(c for c in [sb_ctx, asana_ctx, web_ctx] if c)
         enriched = f"{db_context}\n\n{user_request}" if db_context else user_request
 
         result = await loop.run_in_executor(
