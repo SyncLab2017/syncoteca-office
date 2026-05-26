@@ -48,16 +48,16 @@ async def _deny(update: Update) -> None:
 # --- Agent identity ---
 
 AGENT_NAMES = {
-    "license_manager": "Екатерина",
+    "license_manager": "Рико",
     "lawyer": "Ксюша",
     "accountant": "Марина",
-    "content_manager": "Саша",
+    "content_manager": "Ковальски",
     "biz_dev": "Директор по развитию",
     "developer": "Разработчик",
 }
 
 AGENT_LABELS = {
-    "license_manager": "📋 Екатерина (Лицензионный менеджер)",
+    "license_manager": "📋 Рико (Лицензионный менеджер)",
     "lawyer": "⚖️ Ксюша (Юрист)",
     "accountant": "💰 Марина (Бухгалтер)",
     "biz_dev": "🚀 Директор по развитию",
@@ -65,9 +65,10 @@ AGENT_LABELS = {
 }
 
 AGENT_MEMORY_NAMES = {
-    "ekaterina": "license_manager",
-    "ekaterina": "license_manager",
-    "sasha": "content_manager",
+    "rico": "license_manager",
+    "рико": "license_manager",
+    "kowalski": "content_manager",
+    "ковальски": "content_manager",
     "marina": "accountant",
     "ksusha": "lawyer",
     "license_manager": "license_manager",
@@ -78,10 +79,10 @@ AGENT_MEMORY_NAMES = {
 
 # Canonical memory name per agent key
 MEMORY_NAME_MAP = {
-    "license_manager": "ekaterina",
+    "license_manager": "rico",
     "lawyer": "ksusha",
     "accountant": "marina",
-    "content_manager": "sasha",
+    "content_manager": "kowalski",
     "biz_dev": "biz_dev",
     "developer": "developer",
 }
@@ -233,9 +234,9 @@ async def download_and_transcribe(update: Update) -> str | None:
         return None
 
 
-# --- License manager (Екатерина) dialogue ---
+# --- License manager (Рико) dialogue ---
 
-LICENSE_SYSTEM_PROMPT = _load_prompt("ekaterina")
+LICENSE_SYSTEM_PROMPT = _load_prompt("rico")
 
 
 _SEARCH_STOP_WORDS = {
@@ -370,7 +371,7 @@ def search_asana_contacts(query: str) -> str:
 
 
 def run_license_dialogue(chat_id: int, user_message: str) -> dict:
-    """Direct Anthropic API call with conversation history for Екатерина."""
+    """Direct Anthropic API call with conversation history for Рико."""
     import anthropic
     import datetime
 
@@ -465,7 +466,7 @@ AGENT_KEYWORDS = {
     "license_manager": [
         "лицензи", "правообладател", "права", "синхронизац", "sync", "isrc",
         "iswc", "паблишер", "publisher", "рао", "mcps", "ascap", "bmi",
-        "переговор", "трек", "каталог", "найди", "найти", "екатерина", "катя",
+        "переговор", "трек", "каталог", "найди", "найти", "рико", "rico",
     ],
     "lawyer": [
         "договор", "контракт", "юрист", "юридич", "риск", "эксклюзив",
@@ -482,10 +483,13 @@ AGENT_KEYWORDS = {
         "агентств", "партнёр", "партнер", "продвижени", "outreach",
         "холодное письмо", "новый клиент", "развити",
     ],
+    "content_manager": [
+        "метадан", "bpm", "каталог", "тег", "isrc", "iswc", "ddex", "cwr",
+        "ковальски", "kowalski", "контент",
+    ],
     "developer": [
-        "база данных", "схема", "api", "интеграц", "ddex", "cwr",
-        "метадан", "supabase", "postgresql", "sql", "автоматиз",
-        "разработ", "скрипт", "импорт", "саша",
+        "база данных", "схема", "api", "интеграц", "supabase", "postgresql",
+        "sql", "автоматиз", "разработ", "скрипт", "импорт",
     ],
 }
 
@@ -505,7 +509,7 @@ _PROMPT_KEYS = {
     "accountant": "marina",
     "lawyer": "ksusha",
     "biz_dev": "biz_dev",
-    "content_manager": "sasha",
+    "content_manager": "kowalski",
     "developer": "developer",
 }
 
@@ -658,14 +662,13 @@ def run_coordinator(chat_id: int, message: str) -> dict:
 def _resolve_memory_name(raw: str) -> str:
     """Map user input to canonical agent_memory name."""
     mapping = {
-        "екатерина": "ekaterina",
-        "катя": "ekaterina",
-        "ekaterina": "ekaterina",
-        "license": "ekaterina",
-        "license_manager": "ekaterina",
-        "саша": "sasha",
-        "sasha": "sasha",
-        "content": "sasha",
+        "рико": "rico",
+        "rico": "rico",
+        "license": "rico",
+        "license_manager": "rico",
+        "ковальски": "kowalski",
+        "kowalski": "kowalski",
+        "content": "kowalski",
         "марина": "marina",
         "marina": "marina",
         "accountant": "marina",
@@ -679,8 +682,8 @@ def _resolve_memory_name(raw: str) -> str:
 
 def _memory_display_name(mem_name: str) -> str:
     return {
-        "ekaterina": "Екатерины",
-        "sasha": "Саши",
+        "rico": "Рико",
+        "kowalski": "Ковальски",
         "marina": "Марины",
         "ksusha": "Ксюши",
     }.get(mem_name, mem_name)
@@ -725,7 +728,7 @@ WELCOME = """
 По умолчанию работает *Координатор* — он сам поймёт кому передать задачу.
 
 *Прямой доступ к агенту:*
-/license — Екатерина (лицензии, права)
+/license — Рико (лицензии, права)
 /lawyer — Ксюша (договоры, юрист)
 /accountant — Марина (роялти, бухгалтерия)
 /bizdev — Директор по развитию
@@ -734,9 +737,9 @@ WELCOME = """
 
 *Обучение агентов:*
 /know марина НДС с 2026: 22%
-/teach екатерина — режим обучения (все сообщения → знания агента)
+/teach рико — режим обучения (все сообщения → знания агента)
 /teach_stop — выйти из режима обучения
-/memory екатерина — показать знания агента
+/memory рико — показать знания агента
 """
 
 
@@ -786,7 +789,7 @@ async def handle_teach(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not _is_owner(update):
         return await _deny(update)
     args = context.args
-    raw = args[0] if args else "ekaterina"
+    raw = args[0] if args else "rico"
     mem_name = _resolve_memory_name(raw)
     display = _memory_display_name(mem_name)
 
@@ -819,7 +822,7 @@ async def handle_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not _is_owner(update):
         return await _deny(update)
     args = context.args
-    raw = args[0] if args else "ekaterina"
+    raw = args[0] if args else "rico"
     mem_name = _resolve_memory_name(raw)
     display = _memory_display_name(mem_name)
     entries = _knowledge_read(mem_name)
@@ -856,7 +859,7 @@ async def handle_know(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         lines = [
             "Использование: /know <агент> <текст>",
             "",
-            "Агенты: екатерина · ксюша · марина · саша · biz_dev · developer",
+            "Агенты: рико · ксюша · марина · ковальски · biz_dev · developer",
             "",
             "Пример: /know marina НДС внутренний рынок с 2026: 22%",
         ]
@@ -882,7 +885,7 @@ def _clean_for_telegram(text: str) -> str:
 
 async def _dispatch_license(update: Update, user_request: str) -> None:
     chat_id = update.effective_chat.id
-    thinking_msg = await update.message.reply_text("📋 Екатерина думает…")
+    thinking_msg = await update.message.reply_text("📋 Рико думает…")
 
     try:
         loop = asyncio.get_event_loop()
@@ -1168,15 +1171,15 @@ async def post_init(app: Application) -> None:
     commands = [
         BotCommand("start", "Главное меню"),
         BotCommand("stop", "Вернуться к координатору"),
-        BotCommand("license", "→ Екатерина (лицензии, права)"),
+        BotCommand("license", "→ Рико (лицензии, права)"),
         BotCommand("lawyer", "→ Ксюша (договоры, юрист)"),
         BotCommand("accountant", "→ Марина (роялти, бухгалтерия)"),
         BotCommand("bizdev", "→ Директор по развитию"),
         BotCommand("dev", "→ Разработчик"),
         BotCommand("know", "Записать знание: /know марина НДС 22%"),
-        BotCommand("teach", "Режим обучения: /teach екатерина"),
+        BotCommand("teach", "Режим обучения: /teach рико"),
         BotCommand("teach_stop", "Завершить режим обучения"),
-        BotCommand("memory", "Показать знания: /memory екатерина"),
+        BotCommand("memory", "Показать знания: /memory рико"),
     ]
     await app.bot.set_my_commands(commands)
 
