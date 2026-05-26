@@ -1085,6 +1085,10 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
         elif action == "calendar":
             await thinking_msg.edit_text("📅 Создаю встречу…")
             from syncoteca.tools.google_calendar_tool import GoogleCalendarTool
+            # Extract emails ONLY from the user's raw text — never trust LLM-generated attendees
+            # (LLM hallucinates emails for company names, causing 400 Invalid attendee email)
+            _email_pat = re.compile(r'[a-zA-Z0-9_.+\-]+@[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}')
+            safe_attendees = _email_pat.findall(text)
             cal = GoogleCalendarTool()
             cal_result = await loop.run_in_executor(
                 None,
@@ -1094,7 +1098,7 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
                     time=result.get("time", "10:00"),
                     duration_minutes=int(result.get("duration_minutes", 60)),
                     description=result.get("description", ""),
-                    attendees=result.get("attendees", []),
+                    attendees=safe_attendees,
                 ),
             )
             await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{cal_result}")
