@@ -28,4 +28,5 @@ src/.DS_Store
 src/syncoteca/config/.DS_Store
 CBAPI.txt
 API Tavily.txt
-CBAPI.txt
+ASANA_TOKEN.txt
+.gstack/

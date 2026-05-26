@@ -372,11 +372,13 @@ def search_asana_contacts(query: str) -> str:
 def run_license_dialogue(chat_id: int, user_message: str) -> dict:
     """Direct Anthropic API call with conversation history for Екатерина."""
     import anthropic
+    import datetime
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
+    today_prefix = f"[СЕГОДНЯ: {datetime.date.today().isoformat()}]\n"
     history = LICENSE_SESSIONS[chat_id]
-    history.append({"role": "user", "content": user_message})
+    history.append({"role": "user", "content": today_prefix + user_message})
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
@@ -404,7 +406,12 @@ def run_license_dialogue(chat_id: int, user_message: str) -> dict:
     return {"action": "continue_dialogue", "reply_text": assistant_text}
 
 
-def save_to_asana(full_text: str, task_name: str = "") -> str:
+def save_to_asana(
+    full_text: str,
+    task_name: str = "",
+    assignee: str = "denis@synclab.pro",
+    due_on: str = "",
+) -> str:
     """Create Asana task from license request draft. Returns task URL or error."""
     import httpx
     token = os.getenv("ASANA_TOKEN", "")
@@ -421,11 +428,14 @@ def save_to_asana(full_text: str, task_name: str = "") -> str:
     notes = "\n".join(lines[1:]).strip() if len(lines) > 1 else full_text
 
     import datetime
+    if not due_on:
+        due_on = datetime.date.today().isoformat()
+
     data: dict = {
         "name": task_name,
         "notes": notes,
-        "assignee": "denis@synclab.pro",
-        "due_on": datetime.date.today().isoformat(),
+        "assignee": assignee or "denis@synclab.pro",
+        "due_on": due_on,
     }
     if project_id:
         data["projects"] = [project_id]
@@ -910,8 +920,12 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
         if action == "save_to_asana":
             full_text = result.get("full_text", reply_text)
             subject = result.get("subject", "")
+            assignee = result.get("assignee_email", "denis@synclab.pro")
+            due_on = result.get("due_on", "")
             await thinking_msg.edit_text(f"📋 Сохраняю в Asana: {subject or 'задача'}…")
-            asana_result = await loop.run_in_executor(None, save_to_asana, full_text, subject)
+            asana_result = await loop.run_in_executor(
+                None, save_to_asana, full_text, subject, assignee, due_on
+            )
             await update.message.reply_text(asana_result)
         elif action == "send_email":
             to = result.get("to", "")
@@ -929,13 +943,17 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
             subject = result.get("subject", "Запрос лицензии")
             body = result.get("body", reply_text)
             full_text = result.get("full_text", body)
+            assignee = result.get("assignee_email", "denis@synclab.pro")
+            due_on = result.get("due_on", "")
             await thinking_msg.edit_text(f"📧 Отправляю письмо на {to} и сохраняю в Asana…")
             from syncoteca.tools.email_tool import EmailDraftTool
             mailer = EmailDraftTool()
             mail_result = await loop.run_in_executor(
                 None, lambda: mailer._run(to=to, subject=subject, body=body, send=True)
             )
-            asana_result = await loop.run_in_executor(None, save_to_asana, full_text, subject)
+            asana_result = await loop.run_in_executor(
+                None, save_to_asana, full_text, subject, assignee, due_on
+            )
             await update.message.reply_text(f"{mail_result}\n\n{asana_result}")
         elif action == "draft_ready":
             full = reply_text + _SEND_CHOICE
