@@ -506,6 +506,8 @@ def fetch_asana_briefing() -> dict:
 
 def format_morning_briefing(data: dict) -> str:
     import datetime
+    from collections import defaultdict
+
     _DAY_NAMES = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
     _MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня",
                "июля", "августа", "сентября", "октября", "ноября", "декабря"]
@@ -527,26 +529,28 @@ def format_morning_briefing(data: dict) -> str:
         lines.append("✅ Задач на сегодня нет. Хороший день!")
         return "\n".join(lines)
 
-    if today_tasks:
-        lines.append(f"📋 На сегодня: {len(today_tasks)}")
-        for t in today_tasks:
-            assignee = (t.get("assignee") or {}).get("name", "")
-            suffix = f" — {assignee}" if assignee else ""
-            lines.append(f"• {t['name']}{suffix}")
-        lines.append("")
+    # Group by assignee
+    by_person: dict[str, dict[str, list]] = defaultdict(lambda: {"today": [], "overdue": []})
+    for t in today_tasks:
+        name = (t.get("assignee") or {}).get("name", "") or "Без исполнителя"
+        by_person[name]["today"].append(t["name"])
+    for t in overdue_tasks:
+        name = (t.get("assignee") or {}).get("name", "") or "Без исполнителя"
+        due = t.get("due_on", "")
+        label = f"{t['name']} (до {due})" if due else t["name"]
+        by_person[name]["overdue"].append(label)
 
-    if overdue_tasks:
-        lines.append(f"🔴 Просрочено: {len(overdue_tasks)}")
-        for t in overdue_tasks:
-            assignee = (t.get("assignee") or {}).get("name", "")
-            due = t.get("due_on", "")
-            suffix_parts = []
-            if due:
-                suffix_parts.append(f"до {due}")
-            if assignee:
-                suffix_parts.append(assignee)
-            suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
-            lines.append(f"• {t['name']}{suffix}")
+    for person, buckets in by_person.items():
+        person_total = len(buckets["today"]) + len(buckets["overdue"])
+        lines.append(f"👤 {person} — {person_total} задач")
+        if buckets["today"]:
+            lines.append("  📋 Сегодня:")
+            for task in buckets["today"]:
+                lines.append(f"    • {task}")
+        if buckets["overdue"]:
+            lines.append("  🔴 Просрочено:")
+            for task in buckets["overdue"]:
+                lines.append(f"    • {task}")
         lines.append("")
 
     lines.append(f"Всего активных: {total}")
