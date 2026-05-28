@@ -1,6 +1,7 @@
 """Telegram bot interface for Синкотека multi-agent office."""
 
 import asyncio
+import httpx
 import json
 import logging
 import os
@@ -1194,11 +1195,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _dispatch_coordinator(update, text)
 
 
+_BRIEFING_KEYWORDS = {
+    "задачи", "задач", "задача", "задание", "задания", "заданий",
+    "asana", "асана", "планы", "план", "расписание", "список дел",
+    "что сегодня", "что у меня", "что надо", "что нужно сделать",
+    "брифинг", "briefing", "дела",
+}
+
+
+def _is_briefing_intent(text: str) -> bool:
+    lower = text.lower()
+    today_words = ("сегодня", "today", "на день", "на сегодня")
+    has_today = any(w in lower for w in today_words)
+    has_tasks = any(w in lower for w in _BRIEFING_KEYWORDS)
+    return has_today and has_tasks
+
+
 async def _dispatch_coordinator(update: Update, text: str) -> None:
     chat_id = update.effective_chat.id
     thinking_msg = await update.message.reply_text("🎯 Рядовой…")
     try:
         loop = asyncio.get_event_loop()
+
+        # Briefing intent: pull Asana directly, skip LLM routing
+        if _is_briefing_intent(text):
+            data = await loop.run_in_executor(None, fetch_asana_briefing)
+            reply = format_morning_briefing(data)
+            await thinking_msg.edit_text(reply, parse_mode="Markdown")
+            return
         result = await loop.run_in_executor(None, run_coordinator, chat_id, text)
         action = result.get("action", "reply")
 
