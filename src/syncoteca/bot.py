@@ -463,8 +463,61 @@ def save_to_asana(
 
 # --- Morning briefing ---
 
-def fetch_asana_briefing() -> dict:
-    """Fetch incomplete tasks due today and overdue from Asana."""
+_DAY_NAMES_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+_DAY_NAMES_FULL = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+_MONTHS_RU = ["января", "февраля", "марта", "апреля", "мая", "июня",
+              "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+
+
+def _briefing_date_bounds(date_range: str) -> tuple[str, str]:
+    """Return (after_exclusive, before_exclusive) ISO date strings for Asana query.
+    Empty string means no bound."""
+    import datetime
+    today = datetime.date.today()
+    d = datetime.timedelta
+
+    if date_range == "today":
+        return ("", (today + d(days=1)).isoformat())
+    if date_range == "tomorrow":
+        return (today.isoformat(), (today + d(days=2)).isoformat())
+    if date_range == "this_week":
+        # from today through Sunday of current week
+        end = today + d(days=(6 - today.weekday()) + 1)
+        return ((today - d(days=1)).isoformat(), end.isoformat())
+    if date_range == "next_week":
+        days_to_monday = (7 - today.weekday()) % 7 or 7
+        next_mon = today + d(days=days_to_monday)
+        next_sun_plus1 = next_mon + d(days=7)
+        return ((next_mon - d(days=1)).isoformat(), next_sun_plus1.isoformat())
+    # fallback: today
+    return ("", (today + d(days=1)).isoformat())
+
+
+_asana_me_gid_cache: str | None = None
+
+
+def _get_asana_me_gid() -> str | None:
+    global _asana_me_gid_cache
+    if _asana_me_gid_cache:
+        return _asana_me_gid_cache
+    token = os.getenv("ASANA_TOKEN", "")
+    if not token:
+        return None
+    try:
+        resp = httpx.get(
+            "https://app.asana.com/api/1.0/users/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        _asana_me_gid_cache = resp.json()["data"]["gid"]
+        return _asana_me_gid_cache
+    except Exception:
+        return None
+
+
+def fetch_asana_briefing(date_range: str = "today", filter_me: bool = False) -> dict:
+    """Fetch Asana tasks for given date_range. filter_me=True restricts to current user."""
     import datetime
     token = os.getenv("ASANA_TOKEN", "")
     project_id = os.getenv("ASANA_PROJECT_ID", "")
@@ -472,19 +525,25 @@ def fetch_asana_briefing() -> dict:
     if not token:
         return {"error": "ASANA_TOKEN не настроен"}
 
-    today = datetime.date.today()
-    tomorrow = (today + datetime.timedelta(days=1)).isoformat()
+    after, before = _briefing_date_bounds(date_range)
 
     try:
         headers = {"Authorization": f"Bearer {token}"}
-        params = {
+        params: dict = {
             "opt_fields": "name,due_on,completed,assignee.name,permalink_url",
             "completed": "false",
-            "due_on.before": tomorrow,
             "limit": "50",
         }
+        if before:
+            params["due_on.before"] = before
+        if after:
+            params["due_on.after"] = after
         if project_id:
             params["projects.any"] = project_id
+        if filter_me:
+            me_gid = _get_asana_me_gid()
+            if me_gid:
+                params["assignee.any"] = me_gid
 
         resp = httpx.get(
             f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/tasks/search",
@@ -495,65 +554,121 @@ def fetch_asana_briefing() -> dict:
         resp.raise_for_status()
         tasks = resp.json().get("data", [])
 
-        today_str = today.isoformat()
-        today_tasks = [t for t in tasks if t.get("due_on") == today_str]
-        overdue_tasks = [t for t in tasks if t.get("due_on") and t.get("due_on") < today_str]
+        today_str = datetime.date.today().isoformat()
 
-        return {"today": today_tasks, "overdue": overdue_tasks}
+        if date_range == "today":
+            today_tasks = [t for t in tasks if t.get("due_on") == today_str]
+            overdue_tasks = [t for t in tasks if t.get("due_on") and t.get("due_on") < today_str]
+            return {"today": today_tasks, "overdue": overdue_tasks, "date_range": date_range}
+        else:
+            return {"tasks": tasks, "date_range": date_range}
+
     except Exception as e:
         return {"error": str(e)}
 
 
-def format_morning_briefing(data: dict) -> str:
+def parse_briefing_intent(text: str) -> dict:
+    """Extract date_range and filter_me from natural language."""
+    lower = text.lower()
+
+    if any(w in lower for w in ("следующ", "будущ")) and "недел" in lower:
+        date_range = "next_week"
+    elif "недел" in lower or "эту недел" in lower:
+        date_range = "this_week"
+    elif "завтра" in lower:
+        date_range = "tomorrow"
+    else:
+        date_range = "today"
+
+    filter_me = any(w in lower for w in ("мои", "моих", "мне", "только мои", "мои задачи", "у меня", "мне нужно"))
+
+    return {"date_range": date_range, "filter_me": filter_me}
+
+
+def format_morning_briefing(data: dict, date_range: str = "today") -> str:
     import datetime
     from collections import defaultdict
 
-    _DAY_NAMES = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
-    _MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня",
-               "июля", "августа", "сентября", "октября", "ноября", "декабря"]
-
     today = datetime.date.today()
-    day_name = _DAY_NAMES[today.weekday()]
-    date_str = f"{today.day} {_MONTHS[today.month - 1]} {today.year}"
+    day_name = _DAY_NAMES_FULL[today.weekday()]
+    date_str = f"{today.day} {_MONTHS_RU[today.month - 1]} {today.year}"
 
     if "error" in data:
         return f"☀️ Доброе утро!\n\n⚠️ Не удалось получить задачи из Asana: {data['error']}"
 
-    today_tasks = data.get("today", [])
-    overdue_tasks = data.get("overdue", [])
-    total = len(today_tasks) + len(overdue_tasks)
+    dr = data.get("date_range", date_range)
 
-    lines = [f"☀️ Утренний брифинг — {day_name}, {date_str}\n"]
+    _RANGE_LABELS = {
+        "today": f"☀️ Утренний брифинг — {day_name}, {date_str}",
+        "tomorrow": "📅 Задачи на завтра",
+        "this_week": "📅 Задачи на эту неделю",
+        "next_week": "📅 Задачи на следующую неделю",
+    }
+    header = _RANGE_LABELS.get(dr, f"☀️ Брифинг — {date_str}")
 
-    if total == 0:
-        lines.append("✅ Задач на сегодня нет. Хороший день!")
+    # --- Today view: split today / overdue, grouped by person ---
+    if dr == "today":
+        today_tasks = data.get("today", [])
+        overdue_tasks = data.get("overdue", [])
+        total = len(today_tasks) + len(overdue_tasks)
+
+        lines = [f"{header}\n"]
+        if total == 0:
+            lines.append("✅ Задач на сегодня нет. Хороший день!")
+            return "\n".join(lines)
+
+        by_person: dict[str, dict] = defaultdict(lambda: {"today": [], "overdue": []})
+        for t in today_tasks:
+            person = (t.get("assignee") or {}).get("name", "") or "Без исполнителя"
+            by_person[person]["today"].append(t["name"])
+        for t in overdue_tasks:
+            person = (t.get("assignee") or {}).get("name", "") or "Без исполнителя"
+            due = t.get("due_on", "")
+            label = f"{t['name']} (до {due})" if due else t["name"]
+            by_person[person]["overdue"].append(label)
+
+        for person, buckets in by_person.items():
+            cnt = len(buckets["today"]) + len(buckets["overdue"])
+            lines.append(f"👤 {person} — {cnt} задач")
+            if buckets["today"]:
+                lines.append("  📋 Сегодня:")
+                for task in buckets["today"]:
+                    lines.append(f"    • {task}")
+            if buckets["overdue"]:
+                lines.append("  🔴 Просрочено:")
+                for task in buckets["overdue"]:
+                    lines.append(f"    • {task}")
+            lines.append("")
+
+        lines.append(f"Всего активных: {total}")
         return "\n".join(lines)
 
-    # Group by assignee
-    by_person: dict[str, dict[str, list]] = defaultdict(lambda: {"today": [], "overdue": []})
-    for t in today_tasks:
-        name = (t.get("assignee") or {}).get("name", "") or "Без исполнителя"
-        by_person[name]["today"].append(t["name"])
-    for t in overdue_tasks:
-        name = (t.get("assignee") or {}).get("name", "") or "Без исполнителя"
-        due = t.get("due_on", "")
-        label = f"{t['name']} (до {due})" if due else t["name"]
-        by_person[name]["overdue"].append(label)
+    # --- Week / tomorrow view: grouped by person, date shown per task ---
+    tasks = data.get("tasks", [])
+    total = len(tasks)
+    lines = [f"{header}\n"]
 
-    for person, buckets in by_person.items():
-        person_total = len(buckets["today"]) + len(buckets["overdue"])
-        lines.append(f"👤 {person} — {person_total} задач")
-        if buckets["today"]:
-            lines.append("  📋 Сегодня:")
-            for task in buckets["today"]:
-                lines.append(f"    • {task}")
-        if buckets["overdue"]:
-            lines.append("  🔴 Просрочено:")
-            for task in buckets["overdue"]:
-                lines.append(f"    • {task}")
+    if total == 0:
+        lines.append("✅ Задач нет.")
+        return "\n".join(lines)
+
+    by_person2: dict[str, list] = defaultdict(list)
+    for t in tasks:
+        person = (t.get("assignee") or {}).get("name", "") or "Без исполнителя"
+        due = t.get("due_on", "")
+        due_label = ""
+        if due:
+            d = datetime.date.fromisoformat(due)
+            due_label = f" [{_DAY_NAMES_RU[d.weekday()]} {d.day} {_MONTHS_RU[d.month-1]}]"
+        by_person2[person].append(f"{t['name']}{due_label}")
+
+    for person, task_list in by_person2.items():
+        lines.append(f"👤 {person} — {len(task_list)} задач")
+        for task in task_list:
+            lines.append(f"  • {task}")
         lines.append("")
 
-    lines.append(f"Всего активных: {total}")
+    lines.append(f"Всего: {total}")
     return "\n".join(lines)
 
 
@@ -562,12 +677,9 @@ async def morning_briefing_job(context) -> None:
     if not owner_id:
         return
     loop = asyncio.get_event_loop()
-    data = await loop.run_in_executor(None, fetch_asana_briefing)
-    text = format_morning_briefing(data)
-    await context.bot.send_message(
-        chat_id=int(owner_id),
-        text=text,
-    )
+    data = await loop.run_in_executor(None, fetch_asana_briefing, "today", False)
+    text = format_morning_briefing(data, "today")
+    await context.bot.send_message(chat_id=int(owner_id), text=text)
 
 
 # --- Agent routing ---
@@ -1222,8 +1334,11 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
 
         # Briefing intent: pull Asana directly, skip LLM routing
         if _is_briefing_intent(text):
-            data = await loop.run_in_executor(None, fetch_asana_briefing)
-            reply = format_morning_briefing(data)
+            intent = parse_briefing_intent(text)
+            data = await loop.run_in_executor(
+                None, fetch_asana_briefing, intent["date_range"], intent["filter_me"]
+            )
+            reply = format_morning_briefing(data, intent["date_range"])
             await thinking_msg.edit_text(reply)
             return
         result = await loop.run_in_executor(None, run_coordinator, chat_id, text)
@@ -1288,13 +1403,16 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
 
 
 async def handle_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/briefing — request morning briefing on demand."""
+    """/briefing [tomorrow|week|nextweek] — request briefing on demand."""
     if not _is_owner(update):
         return await _deny(update)
+    arg = (context.args[0] if context.args else "").lower()
+    dr_map = {"tomorrow": "tomorrow", "week": "this_week", "nextweek": "next_week"}
+    date_range = dr_map.get(arg, "today")
     thinking = await update.message.reply_text("📋 Запрашиваю задачи из Asana…")
     loop = asyncio.get_event_loop()
-    data = await loop.run_in_executor(None, fetch_asana_briefing)
-    text = format_morning_briefing(data)
+    data = await loop.run_in_executor(None, fetch_asana_briefing, date_range, False)
+    text = format_morning_briefing(data, date_range)
     await thinking.edit_text(text)
 
 
