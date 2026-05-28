@@ -460,6 +460,112 @@ def save_to_asana(
         return f"❌ Ошибка Asana: {e}"
 
 
+# --- Morning briefing ---
+
+def fetch_asana_briefing() -> dict:
+    """Fetch incomplete tasks due today and overdue from Asana."""
+    import datetime
+    token = os.getenv("ASANA_TOKEN", "")
+    project_id = os.getenv("ASANA_PROJECT_ID", "")
+    workspace_id = os.getenv("ASANA_WORKSPACE_ID", "331121027676371")
+    if not token:
+        return {"error": "ASANA_TOKEN не настроен"}
+
+    today = datetime.date.today()
+    tomorrow = (today + datetime.timedelta(days=1)).isoformat()
+
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {
+            "opt_fields": "name,due_on,completed,assignee.name,permalink_url",
+            "completed": "false",
+            "due_on.before": tomorrow,
+            "limit": "50",
+        }
+        if project_id:
+            params["projects.any"] = project_id
+
+        resp = httpx.get(
+            f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/tasks/search",
+            headers=headers,
+            params=params,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        tasks = resp.json().get("data", [])
+
+        today_str = today.isoformat()
+        today_tasks = [t for t in tasks if t.get("due_on") == today_str]
+        overdue_tasks = [t for t in tasks if t.get("due_on") and t.get("due_on") < today_str]
+
+        return {"today": today_tasks, "overdue": overdue_tasks}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def format_morning_briefing(data: dict) -> str:
+    import datetime
+    _DAY_NAMES = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    _MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня",
+               "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+
+    today = datetime.date.today()
+    day_name = _DAY_NAMES[today.weekday()]
+    date_str = f"{today.day} {_MONTHS[today.month - 1]} {today.year}"
+
+    if "error" in data:
+        return f"☀️ Доброе утро!\n\n⚠️ Не удалось получить задачи из Asana: {data['error']}"
+
+    today_tasks = data.get("today", [])
+    overdue_tasks = data.get("overdue", [])
+    total = len(today_tasks) + len(overdue_tasks)
+
+    lines = [f"☀️ *Утренний брифинг — {day_name}, {date_str}*\n"]
+
+    if total == 0:
+        lines.append("✅ Задач на сегодня нет. Хороший день!")
+        return "\n".join(lines)
+
+    if today_tasks:
+        lines.append(f"📋 *На сегодня: {len(today_tasks)}*")
+        for t in today_tasks:
+            assignee = (t.get("assignee") or {}).get("name", "")
+            suffix = f" — {assignee}" if assignee else ""
+            lines.append(f"• {t['name']}{suffix}")
+        lines.append("")
+
+    if overdue_tasks:
+        lines.append(f"🔴 *Просрочено: {len(overdue_tasks)}*")
+        for t in overdue_tasks:
+            assignee = (t.get("assignee") or {}).get("name", "")
+            due = t.get("due_on", "")
+            suffix_parts = []
+            if due:
+                suffix_parts.append(f"до {due}")
+            if assignee:
+                suffix_parts.append(assignee)
+            suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
+            lines.append(f"• {t['name']}{suffix}")
+        lines.append("")
+
+    lines.append(f"_Всего активных: {total}_")
+    return "\n".join(lines)
+
+
+async def morning_briefing_job(context) -> None:
+    owner_id = os.getenv("TELEGRAM_OWNER_ID", "")
+    if not owner_id:
+        return
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(None, fetch_asana_briefing)
+    text = format_morning_briefing(data)
+    await context.bot.send_message(
+        chat_id=int(owner_id),
+        text=text,
+        parse_mode="Markdown",
+    )
+
+
 # --- Agent routing ---
 
 AGENT_KEYWORDS = {
@@ -1154,6 +1260,17 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
         await thinking_msg.edit_text(f"Ошибка координатора: {e}")
 
 
+async def handle_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/briefing — request morning briefing on demand."""
+    if not _is_owner(update):
+        return await _deny(update)
+    thinking = await update.message.reply_text("📋 Запрашиваю задачи из Asana…")
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(None, fetch_asana_briefing)
+    text = format_morning_briefing(data)
+    await thinking.edit_text(text, parse_mode="Markdown")
+
+
 async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/stop — clear sticky agent, return to coordinator."""
     if not _is_owner(update):
@@ -1180,6 +1297,7 @@ async def post_init(app: Application) -> None:
         BotCommand("teach", "Режим обучения: /teach рико"),
         BotCommand("teach_stop", "Завершить режим обучения"),
         BotCommand("memory", "Показать знания: /memory рико"),
+        BotCommand("briefing", "Брифинг задач Asana на сегодня"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -1203,12 +1321,19 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("memory", handle_memory))
     app.add_handler(CommandHandler("remember", handle_memory_add))
     app.add_handler(CommandHandler("stop", handle_stop))
+    app.add_handler(CommandHandler("briefing", handle_briefing))
 
     for cmd in SLASH_MAP:
         app.add_handler(CommandHandler(cmd, handle_slash_agent))
 
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Morning briefing: every day at 09:00 Moscow time
+    from zoneinfo import ZoneInfo
+    from datetime import time as dt_time
+    moscow_9am = dt_time(9, 0, tzinfo=ZoneInfo("Europe/Moscow"))
+    app.job_queue.run_daily(morning_briefing_job, time=moscow_9am)
 
     logger.info("Синкотека bot starting…")
     app.run_polling(drop_pending_updates=True)
