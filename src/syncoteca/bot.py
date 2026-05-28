@@ -521,14 +521,14 @@ def format_morning_briefing(data: dict) -> str:
     overdue_tasks = data.get("overdue", [])
     total = len(today_tasks) + len(overdue_tasks)
 
-    lines = [f"☀️ *Утренний брифинг — {day_name}, {date_str}*\n"]
+    lines = [f"☀️ Утренний брифинг — {day_name}, {date_str}\n"]
 
     if total == 0:
         lines.append("✅ Задач на сегодня нет. Хороший день!")
         return "\n".join(lines)
 
     if today_tasks:
-        lines.append(f"📋 *На сегодня: {len(today_tasks)}*")
+        lines.append(f"📋 На сегодня: {len(today_tasks)}")
         for t in today_tasks:
             assignee = (t.get("assignee") or {}).get("name", "")
             suffix = f" — {assignee}" if assignee else ""
@@ -536,7 +536,7 @@ def format_morning_briefing(data: dict) -> str:
         lines.append("")
 
     if overdue_tasks:
-        lines.append(f"🔴 *Просрочено: {len(overdue_tasks)}*")
+        lines.append(f"🔴 Просрочено: {len(overdue_tasks)}")
         for t in overdue_tasks:
             assignee = (t.get("assignee") or {}).get("name", "")
             due = t.get("due_on", "")
@@ -549,7 +549,7 @@ def format_morning_briefing(data: dict) -> str:
             lines.append(f"• {t['name']}{suffix}")
         lines.append("")
 
-    lines.append(f"_Всего активных: {total}_")
+    lines.append(f"Всего активных: {total}")
     return "\n".join(lines)
 
 
@@ -563,7 +563,6 @@ async def morning_briefing_job(context) -> None:
     await context.bot.send_message(
         chat_id=int(owner_id),
         text=text,
-        parse_mode="Markdown",
     )
 
 
@@ -1221,7 +1220,7 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
         if _is_briefing_intent(text):
             data = await loop.run_in_executor(None, fetch_asana_briefing)
             reply = format_morning_briefing(data)
-            await thinking_msg.edit_text(reply, parse_mode="Markdown")
+            await thinking_msg.edit_text(reply)
             return
         result = await loop.run_in_executor(None, run_coordinator, chat_id, text)
         action = result.get("action", "reply")
@@ -1292,7 +1291,7 @@ async def handle_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     loop = asyncio.get_event_loop()
     data = await loop.run_in_executor(None, fetch_asana_briefing)
     text = format_morning_briefing(data)
-    await thinking.edit_text(text, parse_mode="Markdown")
+    await thinking.edit_text(text)
 
 
 async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
