@@ -402,19 +402,19 @@ def search_supabase_tracks(query: str) -> str:
             terms = _extract_search_terms(query) or [query.strip()]
         logger.info(f"Track search terms: {terms} (from: {query[:80]})")
 
-        # Per-term OR conditions: each term searched independently across all three columns.
-        # This avoids AND semantics from joining terms in one plainto_tsquery call —
-        # "сколько однажды" would require BOTH words in same field (→ 0 results).
+        # Per-term ilike OR conditions: each term searched independently across all three columns.
+        # PostgREST plfts on text columns doesn't respect the language config for the document
+        # side (uses default tsconfig, not russian) → always returns 0. ilike is reliable.
         conditions = []
         for term in terms[:8]:
-            t = term.replace("(", "").replace(")", "").replace("'", "")
-            if t:
+            t = term.replace("(", "").replace(")", "").replace("'", "").replace("*", "")
+            if len(t) >= 2:
                 for col in ("title", "artist", "album"):
-                    conditions.append(f"{col}.plfts(russian).{t}")
+                    conditions.append(f"{col}.ilike.*{t}*")
         if not conditions:
             return ""
         or_filter = f"({','.join(conditions)})"
-        logger.info(f"Track FTS filter: {or_filter[:200]}")
+        logger.info(f"Track ilike filter: {or_filter[:200]}")
 
         resp = httpx.get(
             f"{base}/rest/v1/tracks",
