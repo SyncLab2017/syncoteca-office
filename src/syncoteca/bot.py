@@ -280,6 +280,10 @@ _TRACK_SEARCH_NOISE = _SEARCH_STOP_WORDS | {
     "сколько", "много", "мало", "столько", "несколько", "хватает",
     "количество", "количества", "количестве", "число", "числе", "числа",
     "есть ли", "have", "how", "many", "much",
+    # time/year context words — appear in "песни 1983 года"
+    "год", "года", "году", "годов", "годом", "годах", "лет",
+    # command words for search/selection (like "покажи", "выведи")
+    "выбери", "найди", "поищи", "подбери", "отбери",
 }
 
 _RU_VOWELS = set("аеёиоуыэюя")
@@ -461,39 +465,65 @@ def search_supabase_tracks(query: str) -> str:
         if not clean_terms:
             return ""
 
-        # Priority: full-phrase match on artist/title (catches "Агата Кристи" as one unit)
-        if len(clean_terms) > 1:
-            phrase = " ".join(clean_terms)
-            conditions.append(f"artist.ilike.*{phrase}*")
-            conditions.append(f"title.ilike.*{phrase}*")
-            # Transliterated phrase for Latin-stored bands (e.g. "наутилус помпилиус")
-            tphrase = _translit_ru(phrase)
-            if tphrase != phrase:
-                conditions.append(f"artist.ilike.*{tphrase}*")
-
-        # Per-term fallback. Label column only for non-quoted terms (quoted = explicit track
-        # title, not label name — avoids «Мелодия» flooding with Фирма Мелодия tracks).
-        search_label = not bool(quoted_terms)
-        for t in clean_terms:
-            cols = ("title", "artist", "album", "label") if search_label else ("title", "artist", "album")
-            for col in cols:
-                conditions.append(f"{col}.ilike.*{t}*")
-            # Transliterated variants for Russian terms referencing Latin-stored artists
-            # e.g. "наутилуса" → stem "наутилус" → translit "nautilus" → matches "Nautilus Pompilius"
-            if _is_cyrillic(t):
-                for stem in _stem_ru(t):
-                    tlit = _translit_ru(stem)
-                    if len(tlit) >= 4 and tlit != stem:
-                        conditions.append(f"artist.ilike.*{tlit}*")
-                        conditions.append(f"title.ilike.*{tlit}*")
-                        if search_label:
-                            conditions.append(f"label.ilike.*{tlit}*")
-
-        or_filter = f"({','.join(conditions)})"
-        logger.info(f"Track ilike filter: {or_filter[:200]}")
-
-        # Year range only for non-quoted queries (avoid filtering "трек «1984»" by year)
+        # Year range extraction before building conditions so year tokens can be excluded
+        # from text search (avoids "1983" matching in title/album/label fields).
         year_from, year_to = _extract_year_range(query) if not quoted_terms else (None, None)
+
+        # Strip pure 4-digit year tokens from text search terms — handled via release_date filter
+        non_year_terms = [t for t in clean_terms if not re.match(r'^\d{4}$', t)]
+        year_only_search = year_from is not None and not non_year_terms
+        # Use non_year_terms for text conditions when possible; fall back to all clean_terms
+        # only if no year was detected (avoids "1983" matching random titles/albums)
+        text_terms = non_year_terms if year_from is not None else clean_terms
+
+        if year_only_search:
+            # Year-only query (e.g. "песни 1983 года") — query release_date directly.
+            # Searching year in text fields returns false matches (titles, album names, etc.)
+            if year_from == year_to or year_to is None:
+                year_conds = [f"release_date.ilike.*{year_from}*"]
+            elif (year_to - year_from) <= 20:
+                year_conds = [f"release_date.ilike.*{y}*" for y in range(year_from, year_to + 1)]
+            else:
+                # Wide range: build one condition per decade prefix
+                decades = sorted({str(y)[:3] for y in range(year_from, year_to + 1)})
+                year_conds = [f"release_date.ilike.*{d}*" for d in decades]
+            or_filter = f"({','.join(year_conds)})"
+            skip_year_postfilter = True  # DB already filtered — no Python pass needed
+        else:
+            skip_year_postfilter = False
+            if not text_terms:
+                return ""
+            # Priority: full-phrase match on artist/title (catches "Агата Кристи" as one unit)
+            if len(text_terms) > 1:
+                phrase = " ".join(text_terms)
+                conditions.append(f"artist.ilike.*{phrase}*")
+                conditions.append(f"title.ilike.*{phrase}*")
+                # Transliterated phrase for Latin-stored bands (e.g. "наутилус помпилиус")
+                tphrase = _translit_ru(phrase)
+                if tphrase != phrase:
+                    conditions.append(f"artist.ilike.*{tphrase}*")
+
+            # Per-term fallback. Label column only for non-quoted terms (quoted = explicit track
+            # title, not label name — avoids «Мелодия» flooding with Фирма Мелодия tracks).
+            search_label = not bool(quoted_terms)
+            for t in text_terms:
+                cols = ("title", "artist", "album", "label") if search_label else ("title", "artist", "album")
+                for col in cols:
+                    conditions.append(f"{col}.ilike.*{t}*")
+                # Transliterated variants for Russian terms referencing Latin-stored artists
+                # e.g. "наутилуса" → stem "наутилус" → translit "nautilus" → matches "Nautilus Pompilius"
+                if _is_cyrillic(t):
+                    for stem in _stem_ru(t):
+                        tlit = _translit_ru(stem)
+                        if len(tlit) >= 4 and tlit != stem:
+                            conditions.append(f"artist.ilike.*{tlit}*")
+                            conditions.append(f"title.ilike.*{tlit}*")
+                            if search_label:
+                                conditions.append(f"label.ilike.*{tlit}*")
+
+            or_filter = f"({','.join(conditions)})"
+
+        logger.info(f"Track ilike filter: {or_filter[:200]}")
 
         resp = httpx.get(
             f"{base}/rest/v1/tracks",
@@ -510,8 +540,9 @@ def search_supabase_tracks(query: str) -> str:
         if not rows:
             return ""
 
-        # Post-filter by year range if detected in query
-        if year_from is not None:
+        # Post-filter by year range if detected in query (skipped for year-only searches
+        # where release_date was already filtered at the DB level)
+        if year_from is not None and not skip_year_postfilter:
             filtered = []
             for r in rows:
                 y = _year_from_release_date(r.get("release_date") or "")
