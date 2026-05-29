@@ -285,6 +285,26 @@ _TRACK_SEARCH_NOISE = _SEARCH_STOP_WORDS | {
 _RU_VOWELS = set("аеёиоуыэюя")
 _RU_ENDINGS = set("аеёиоуыэюяйь")
 
+# Russian→Latin transliteration for searching bands stored in Latin in DB
+# (e.g. "НАутилуса" → stem "наутилус" → translit "nautilus" → matches "Nautilus Pompilius")
+_RU_TRANSLIT = {
+    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e',
+    'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'j', 'к': 'k', 'л': 'l', 'м': 'm',
+    'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+    'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+    'ъ': '', 'ы': 'i', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+}
+
+def _translit_ru(text: str) -> str:
+    """Transliterate Russian Cyrillic to Latin. Used to search Latin-stored artist names."""
+    result = []
+    for c in text.lower():
+        result.append(_RU_TRANSLIT.get(c, c))
+    return ''.join(result)
+
+def _is_cyrillic(text: str) -> bool:
+    return any('Ѐ' <= c <= 'ӿ' for c in text)
+
 
 def _stem_ru(term: str) -> list[str]:
     """Return term + stemmed variants by removing Russian inflection endings."""
@@ -417,11 +437,23 @@ def search_supabase_tracks(query: str) -> str:
             phrase = " ".join(clean_terms)
             conditions.append(f"artist.ilike.*{phrase}*")
             conditions.append(f"title.ilike.*{phrase}*")
+            # Transliterated phrase for Latin-stored bands (e.g. "наутилус помпилиус")
+            tphrase = _translit_ru(phrase)
+            if tphrase != phrase:
+                conditions.append(f"artist.ilike.*{tphrase}*")
 
         # Per-term fallback across all columns
         for t in clean_terms:
             for col in ("title", "artist", "album"):
                 conditions.append(f"{col}.ilike.*{t}*")
+            # Transliterated variants for Russian terms referencing Latin-stored artists
+            # e.g. "наутилуса" → stem "наутилус" → translit "nautilus" → matches "Nautilus Pompilius"
+            if _is_cyrillic(t):
+                for stem in _stem_ru(t):
+                    tlit = _translit_ru(stem)
+                    if len(tlit) >= 4 and tlit != stem:
+                        conditions.append(f"artist.ilike.*{tlit}*")
+                        conditions.append(f"title.ilike.*{tlit}*")
 
         or_filter = f"({','.join(conditions)})"
         logger.info(f"Track ilike filter: {or_filter[:200]}")
