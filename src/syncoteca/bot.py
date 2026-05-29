@@ -286,7 +286,16 @@ def _stem_ru(term: str) -> list[str]:
     return variants
 
 
-_QUOTE_CHARS = ".,!?:;'\"()[]«»„“”‹›–—"
+_QUOTE_CHARS = “.,!?:;'\”()[]«»„””‹›–—“
+
+
+def _extract_quoted_strings(text: str) -> list[str]:
+    “””Extract text inside «», “”, '', curly quotes — these are explicit track/artist names.”””
+    import re
+    found = []
+    for pat in (r'«([^»]+)»', r'“([^”]+)”', r'”([^”]+)”', r”'([^']+)'”):
+        found.extend(re.findall(pat, text))
+    return [s.strip().lower() for s in found if s.strip()]
 
 
 def _extract_search_terms(text: str) -> list[str]:
@@ -359,10 +368,14 @@ def search_supabase_tracks(query: str) -> str:
     if not base or not key:
         return ""
     try:
-        # Strip track-domain noise words so "трек", "информация", "права" don't
-        # fill the limit with false-positive matches before the real title terms.
-        words = [w.strip(_QUOTE_CHARS).lower() for w in query.split()]
-        terms = [w for w in words if len(w) > 1 and w not in _TRACK_SEARCH_NOISE]
+        # Priority 1: extract explicitly quoted strings «...» — these are exact names.
+        # Quoted strings bypass noise filtering entirely: no false positives from
+        # conversational words like "тебя", "каталоге" filling the DB limit.
+        terms = _extract_quoted_strings(query)
+        if not terms:
+            # Priority 2: noise-filtered word extraction
+            words = [w.strip(_QUOTE_CHARS).lower() for w in query.split()]
+            terms = [w for w in words if len(w) > 1 and w not in _TRACK_SEARCH_NOISE]
         if not terms:
             terms = _extract_search_terms(query) or [query.strip()]
         logger.info(f"Track search terms: {terms} (from: {query[:80]})")
