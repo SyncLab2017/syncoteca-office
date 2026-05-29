@@ -379,7 +379,7 @@ def search_contacts_by_labels(label_names: list[str]) -> str:
     try:
         conditions = []
         for label in label_names[:5]:
-            clean = label.replace("*", "").replace("(", "").replace(")", "").strip()
+            clean = label.replace("*", "").replace("(", "").replace(")", "").replace(",", "").replace("\x00", "").strip()
             # Split multi-word labels into per-word conditions — PostgREST OR filter
             # doesn't handle spaces in ilike values reliably ("ПМИ / ПЕРВОЕ МУЗЫКАЛЬНОЕ"
             # won't match "Первое музыкальное" as a single multi-word slug).
@@ -450,7 +450,11 @@ def search_supabase_tracks(query: str) -> str:
         # Build ilike OR conditions. Add phrase condition first (all terms joined) so
         # "Агата Кристи" matches the exact artist field before per-word fallbacks.
         def _clean(s: str) -> str:
-            return s.replace("(", "").replace(")", "").replace("'", "").replace("*", "")
+            # Strip PostgREST structural chars: comma splits OR conditions, dot separates
+            # col.operator.value, parens wrap groups, * is ilike wildcard, null byte is unsafe.
+            out = s.replace("(", "").replace(")", "").replace("'", "").replace("*", "")
+            out = out.replace(",", "").replace(".", " ").replace("\x00", "")
+            return out.strip()
 
         conditions = []
         clean_terms = [_clean(t) for t in terms[:8] if len(_clean(t)) >= 2]
@@ -583,7 +587,7 @@ def search_supabase_contacts(query: str) -> str:
         # Build OR filter: each term/variant searched across all relevant columns
         conditions = []
         for term in all_terms[:18]:
-            t = term.replace("*", "").replace("(", "").replace(")", "")
+            t = term.replace("*", "").replace("(", "").replace(")", "").replace(",", "").replace(".", " ").replace("\x00", "").strip()
             for col in ("owner_type", "first_name", "last_name", "email", "adittional_info"):
                 conditions.append(f"{col}.ilike.*{t}*")
 
