@@ -263,10 +263,19 @@ _TRACK_SEARCH_NOISE = _SEARCH_STOP_WORDS | {
     "права", "right", "rights", "track", "song", "music", "info",
     "хочу", "хочется", "узнать", "знать", "дать", "дай",
     "нужно", "нужен", "нужна", "нужны",
-    # "group/band" words — meta-query words, not part of track name
+    # group/band meta-words
     "группы", "группа", "группе", "группу", "группой", "группах", "group", "band",
     "называется", "зовётся", "зовется", "под", "названием", "артист", "артиста",
     "исполнитель", "исполнителя", "исполнителем",
+    # catalog query words — appear in "what do you have / show me tracks"
+    "какие", "какой", "какая", "какое", "каких", "которые", "который",
+    "тебя", "тебе", "твои", "твой", "твоя", "тебя",
+    "базе", "базу", "базы", "базой", "каталоге", "каталогу", "каталог", "каталога",
+    "посмотри", "выведи", "покажи", "перечисли", "назови", "скажи",
+    "знаешь", "знаете", "имеются", "имеется", "числится", "числятся",
+    "доступны", "доступно", "доступен", "available",
+    "все", "всё", "всех", "список", "списке", "списку",
+    "твоей", "вашей", "вашем", "ваших", "вашу",
 }
 
 _RU_VOWELS = set("аеёиоуыэюя")
@@ -407,7 +416,7 @@ def search_supabase_tracks(query: str) -> str:
             params={
                 "or": or_filter,
                 "select": "title,artist,album,label,lyrics_author,music_author,link",
-                "limit": "15",
+                "limit": "30",
             },
             timeout=10,
         )
@@ -417,7 +426,8 @@ def search_supabase_tracks(query: str) -> str:
             return ""
 
         labels_found: set[str] = set()
-        lines = ["[ТРЕКИ ИЗ БАЗЫ SYNC LAB:"]
+        count_note = f" (показаны первые {len(rows)}, может быть больше)" if len(rows) >= 30 else f" (всего найдено: {len(rows)})"
+        lines = [f"[ТРЕКИ ИЗ БАЗЫ SYNC LAB{count_note}:"]
         for r in rows:
             title = r.get("title") or ""
             artist = r.get("artist") or ""
