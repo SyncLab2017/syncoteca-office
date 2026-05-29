@@ -276,6 +276,10 @@ _TRACK_SEARCH_NOISE = _SEARCH_STOP_WORDS | {
     "доступны", "доступно", "доступен", "available",
     "все", "всё", "всех", "список", "списке", "списку",
     "твоей", "вашей", "вашем", "ваших", "вашу",
+    # count/quantity question words — appear in "how many tracks do you have"
+    "сколько", "много", "мало", "столько", "несколько", "хватает",
+    "количество", "количества", "количестве", "число", "числе", "числа",
+    "есть ли", "have", "how", "many", "much",
 }
 
 _RU_VOWELS = set("аеёиоуыэюя")
@@ -398,10 +402,17 @@ def search_supabase_tracks(query: str) -> str:
             terms = _extract_search_terms(query) or [query.strip()]
         logger.info(f"Track search terms: {terms} (from: {query[:80]})")
 
-        # Build plainto_tsquery string: join all terms (Postgres FTS handles inflection)
-        fts_q = " ".join(t.replace("(", "").replace(")", "").replace("'", "") for t in terms[:6])
-        # plfts = plainto_tsquery (handles plain space-separated terms, no operator syntax needed)
-        conditions = [f"{col}.plfts(russian).{fts_q}" for col in ("title", "artist", "album")]
+        # Per-term OR conditions: each term searched independently across all three columns.
+        # This avoids AND semantics from joining terms in one plainto_tsquery call —
+        # "сколько однажды" would require BOTH words in same field (→ 0 results).
+        conditions = []
+        for term in terms[:8]:
+            t = term.replace("(", "").replace(")", "").replace("'", "")
+            if t:
+                for col in ("title", "artist", "album"):
+                    conditions.append(f"{col}.plfts(russian).{t}")
+        if not conditions:
+            return ""
         or_filter = f"({','.join(conditions)})"
         logger.info(f"Track FTS filter: {or_filter[:200]}")
 
