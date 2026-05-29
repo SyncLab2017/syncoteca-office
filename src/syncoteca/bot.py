@@ -400,7 +400,8 @@ def search_supabase_tracks(query: str) -> str:
 
         # Build plainto_tsquery string: join all terms (Postgres FTS handles inflection)
         fts_q = " ".join(t.replace("(", "").replace(")", "").replace("'", "") for t in terms[:6])
-        conditions = [f"{col}.fts(russian).{fts_q}" for col in ("title", "artist", "album")]
+        # plfts = plainto_tsquery (handles plain space-separated terms, no operator syntax needed)
+        conditions = [f"{col}.plfts(russian).{fts_q}" for col in ("title", "artist", "album")]
         or_filter = f"({','.join(conditions)})"
         logger.info(f"Track FTS filter: {or_filter[:200]}")
 
