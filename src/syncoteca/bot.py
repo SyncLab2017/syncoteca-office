@@ -494,6 +494,13 @@ def _briefing_date_bounds(date_range: str) -> tuple[str, str]:
 
 
 _asana_me_gid_cache: str | None = None
+_asana_user_gid_cache: dict[str, str] = {}
+
+# Known team emails — override with ASANA_EMAIL_ALEXANDRA / ASANA_EMAIL_EKATERINA in Railway
+_TEAM_EMAILS = {
+    "alexandra": "alexa.sp@yandex.ru",
+    "ekaterina": "kate@synclab.pro",
+}
 
 
 def _get_asana_me_gid() -> str | None:
@@ -514,6 +521,36 @@ def _get_asana_me_gid() -> str | None:
         return _asana_me_gid_cache
     except Exception:
         return None
+
+
+def _get_asana_user_gid(person_key: str) -> str | None:
+    """Lookup Asana GID by email for a team member. Cached per process."""
+    if person_key in _asana_user_gid_cache:
+        return _asana_user_gid_cache[person_key]
+    token = os.getenv("ASANA_TOKEN", "")
+    workspace_id = os.getenv("ASANA_WORKSPACE_ID", "331121027676371")
+    if not token:
+        return None
+    env_key = f"ASANA_EMAIL_{person_key.upper()}"
+    email = os.getenv(env_key, _TEAM_EMAILS.get(person_key, "")).lower()
+    if not email:
+        return None
+    try:
+        resp = httpx.get(
+            f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/users",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"opt_fields": "gid,name,email"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        for user in resp.json().get("data", []):
+            if (user.get("email") or "").lower() == email:
+                _asana_user_gid_cache[person_key] = user["gid"]
+                logger.info(f"Asana GID for {person_key}: {user['gid']} ({user.get('name')})")
+                return user["gid"]
+    except Exception as e:
+        logger.warning(f"Asana user GID lookup failed for {person_key}: {e}")
+    return None
 
 
 def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = None) -> dict:
@@ -539,11 +576,15 @@ def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = 
             params["due_on.before"] = before
         if after:
             params["due_on.after"] = after
-        # project_id intentionally NOT applied for briefing — tasks span multiple projects
+        # Resolve assignee GID and filter server-side (exact, no name guessing)
         if filter_person == "me":
-            me_gid = _get_asana_me_gid()
-            if me_gid:
-                params["assignee.any"] = me_gid
+            gid = _get_asana_me_gid()
+        elif filter_person in ("alexandra", "ekaterina"):
+            gid = _get_asana_user_gid(filter_person)
+        else:
+            gid = None
+        if gid:
+            params["assignee.any"] = gid
 
         resp = httpx.get(
             f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/tasks/search",
@@ -553,22 +594,6 @@ def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = 
         )
         resp.raise_for_status()
         tasks = resp.json().get("data", [])
-
-        # Name-based filter for Ekaterina / Alexandra
-        if filter_person in ("ekaterina", "alexandra"):
-            env_key = f"ASANA_NAME_{'EKATERINA' if filter_person == 'ekaterina' else 'ALEXANDRA'}"
-            env_val = os.getenv(env_key, "").lower()
-            if env_val:
-                name_fragments = [env_val]
-            elif filter_person == "alexandra":
-                name_fragments = ["alexandra guseva", "alexandra", "guseva", "александра"]
-            else:
-                name_fragments = ["kate timashova", "timashova", "kate", "ekaterina", "екатерин"]
-            tasks = [
-                t for t in tasks
-                if any(f in ((t.get("assignee") or {}).get("name", "") or "").lower()
-                       for f in name_fragments)
-            ]
 
         today_str = datetime.date.today().isoformat()
 
