@@ -539,8 +539,7 @@ def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = 
             params["due_on.before"] = before
         if after:
             params["due_on.after"] = after
-        if project_id:
-            params["projects.any"] = project_id
+        # project_id intentionally NOT applied for briefing — tasks span multiple projects
         if filter_person == "me":
             me_gid = _get_asana_me_gid()
             if me_gid:
@@ -562,9 +561,9 @@ def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = 
             if env_val:
                 name_fragments = [env_val]
             elif filter_person == "alexandra":
-                name_fragments = ["alexandra", "александра"]  # try Latin first (most Asana accounts)
+                name_fragments = ["alexandra guseva", "alexandra", "guseva", "александра"]
             else:
-                name_fragments = ["ekaterina", "kate", "екатерин"]
+                name_fragments = ["kate timashova", "timashova", "kate", "ekaterina", "екатерин"]
             tasks = [
                 t for t in tasks
                 if any(f in ((t.get("assignee") or {}).get("name", "") or "").lower()
