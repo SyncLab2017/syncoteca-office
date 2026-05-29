@@ -286,17 +286,26 @@ def _stem_ru(term: str) -> list[str]:
     return variants
 
 
-_QUOTE_CHARS = “.,!?:;'\”()[]«»„””‹›–—“
+_QUOTE_CHARS = ".,!?:;'\"()[]" + "".join(chr(c) for c in (
+    0x00AB, 0x00BB, 0x201E, 0x201C, 0x201D, 0x2039, 0x203A, 0x2013, 0x2014
+))
+_LQ = chr(0x00AB)   # left guillemet
+_RQ = chr(0x00BB)   # right guillemet
+_LC = chr(0x201C)   # left curly double-quote
+_RC = chr(0x201D)   # right curly double-quote
 
 
 def _extract_quoted_strings(text: str) -> list[str]:
-    “””Extract text inside «», “”, '', curly quotes — these are explicit track/artist names.”””
+    """Extract text inside guillemets or double-quotes (explicit names)."""
     import re
     found = []
-    for pat in (r'«([^»]+)»', r'“([^”]+)”', r'”([^”]+)”', r”'([^']+)'”):
+    for pat in (
+        _LQ + r"([^" + _RQ + r"]+)" + _RQ,
+        _LC + r"([^" + _RC + r"]+)" + _RC,
+        r'"([^"]+)"',
+    ):
         found.extend(re.findall(pat, text))
     return [s.strip().lower() for s in found if s.strip()]
-
 
 def _extract_search_terms(text: str) -> list[str]:
     """Extract meaningful search terms, removing Russian/English stop words."""
