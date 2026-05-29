@@ -516,8 +516,9 @@ def _get_asana_me_gid() -> str | None:
         return None
 
 
-def fetch_asana_briefing(date_range: str = "today", filter_me: bool = False) -> dict:
-    """Fetch Asana tasks for given date_range. filter_me=True restricts to current user."""
+def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = None) -> dict:
+    """Fetch Asana tasks for given date_range.
+    filter_person: None=all, 'me'=current user GID, 'ekaterina'/'alexander'=name filter."""
     import datetime
     token = os.getenv("ASANA_TOKEN", "")
     project_id = os.getenv("ASANA_PROJECT_ID", "")
@@ -532,7 +533,7 @@ def fetch_asana_briefing(date_range: str = "today", filter_me: bool = False) -> 
         params: dict = {
             "opt_fields": "name,due_on,completed,assignee.name,permalink_url",
             "completed": "false",
-            "limit": "50",
+            "limit": "100",
         }
         if before:
             params["due_on.before"] = before
@@ -540,7 +541,7 @@ def fetch_asana_briefing(date_range: str = "today", filter_me: bool = False) -> 
             params["due_on.after"] = after
         if project_id:
             params["projects.any"] = project_id
-        if filter_me:
+        if filter_person == "me":
             me_gid = _get_asana_me_gid()
             if me_gid:
                 params["assignee.any"] = me_gid
@@ -554,35 +555,54 @@ def fetch_asana_briefing(date_range: str = "today", filter_me: bool = False) -> 
         resp.raise_for_status()
         tasks = resp.json().get("data", [])
 
+        # Name-based filter for Ekaterina / Alexander
+        if filter_person in ("ekaterina", "alexander"):
+            env_key = f"ASANA_NAME_{'EKATERINA' if filter_person == 'ekaterina' else 'ALEXANDER'}"
+            name_fragment = os.getenv(env_key, filter_person).lower()
+            tasks = [
+                t for t in tasks
+                if name_fragment in ((t.get("assignee") or {}).get("name", "") or "").lower()
+            ]
+
         today_str = datetime.date.today().isoformat()
 
         if date_range == "today":
             today_tasks = [t for t in tasks if t.get("due_on") == today_str]
             overdue_tasks = [t for t in tasks if t.get("due_on") and t.get("due_on") < today_str]
-            return {"today": today_tasks, "overdue": overdue_tasks, "date_range": date_range}
+            return {"today": today_tasks, "overdue": overdue_tasks, "date_range": date_range,
+                    "filter_person": filter_person}
         else:
-            return {"tasks": tasks, "date_range": date_range}
+            return {"tasks": tasks, "date_range": date_range, "filter_person": filter_person}
 
     except Exception as e:
         return {"error": str(e)}
 
 
 def parse_briefing_intent(text: str) -> dict:
-    """Extract date_range and filter_me from natural language."""
+    """Extract date_range and filter_person from natural language."""
     lower = text.lower()
 
+    # Date range
     if any(w in lower for w in ("следующ", "будущ")) and "недел" in lower:
         date_range = "next_week"
-    elif "недел" in lower or "эту недел" in lower:
+    elif "недел" in lower:
         date_range = "this_week"
     elif "завтра" in lower:
         date_range = "tomorrow"
     else:
         date_range = "today"
 
-    filter_me = any(w in lower for w in ("мои", "моих", "мне", "только мои", "мои задачи", "у меня", "мне нужно"))
+    # Person filter — order matters: check specific names before "me"
+    if any(w in lower for w in ("екатерин", "катер", "катя", "кати")):
+        filter_person = "ekaterina"
+    elif any(w in lower for w in ("александр", "саш", "алекс", "саня")):
+        filter_person = "alexander"
+    elif any(w in lower for w in ("мои", "моих", "у меня", "мне", "только мои")):
+        filter_person = "me"
+    else:
+        filter_person = None  # all people
 
-    return {"date_range": date_range, "filter_me": filter_me}
+    return {"date_range": date_range, "filter_person": filter_person}
 
 
 def format_morning_briefing(data: dict, date_range: str = "today") -> str:
@@ -677,7 +697,7 @@ async def morning_briefing_job(context) -> None:
     if not owner_id:
         return
     loop = asyncio.get_event_loop()
-    data = await loop.run_in_executor(None, fetch_asana_briefing, "today", False)
+    data = await loop.run_in_executor(None, fetch_asana_briefing, "today", None)
     text = format_morning_briefing(data, "today")
     await context.bot.send_message(chat_id=int(owner_id), text=text)
 
@@ -1320,10 +1340,16 @@ _BRIEFING_KEYWORDS = {
 
 def _is_briefing_intent(text: str) -> bool:
     lower = text.lower()
-    today_words = ("сегодня", "today", "на день", "на сегодня")
-    has_today = any(w in lower for w in today_words)
     has_tasks = any(w in lower for w in _BRIEFING_KEYWORDS)
-    return has_today and has_tasks
+    # Also trigger on date/person scope words even without an explicit task keyword
+    scope_words = (
+        "завтра", "следующ", "будущ", "недел",
+        "екатерин", "катер", "катя", "кати",
+        "александр", "саш", "алекс", "саня",
+    )
+    has_scope = any(w in lower for w in scope_words)
+    return has_tasks or (has_scope and any(w in lower for w in ("задач", "дел", "план")))
+
 
 
 async def _dispatch_coordinator(update: Update, text: str) -> None:
@@ -1336,7 +1362,7 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
         if _is_briefing_intent(text):
             intent = parse_briefing_intent(text)
             data = await loop.run_in_executor(
-                None, fetch_asana_briefing, intent["date_range"], intent["filter_me"]
+                None, fetch_asana_briefing, intent["date_range"], intent["filter_person"]
             )
             reply = format_morning_briefing(data, intent["date_range"])
             await thinking_msg.edit_text(reply)
@@ -1411,7 +1437,7 @@ async def handle_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     date_range = dr_map.get(arg, "today")
     thinking = await update.message.reply_text("📋 Запрашиваю задачи из Asana…")
     loop = asyncio.get_event_loop()
-    data = await loop.run_in_executor(None, fetch_asana_briefing, date_range, False)
+    data = await loop.run_in_executor(None, fetch_asana_briefing, date_range, None)
     text = format_morning_briefing(data, date_range)
     await thinking.edit_text(text)
 
