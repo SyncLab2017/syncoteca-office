@@ -274,6 +274,124 @@ def _extract_search_terms(text: str) -> list[str]:
     return [w for w in words if len(w) > 2 and w not in _SEARCH_STOP_WORDS]
 
 
+def search_contacts_by_labels(label_names: list[str]) -> str:
+    """Search contacts by label name (owner_type). Returns formatted contacts or ''."""
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not base or not key or not label_names:
+        return ""
+    try:
+        conditions = []
+        for label in label_names[:5]:
+            slug = label[:25].replace("*", "").replace("(", "").replace(")", "").strip()
+            if slug:
+                conditions.append(f"owner_type.ilike.*{slug}*")
+        if not conditions:
+            return ""
+        or_filter = f"({','.join(conditions)})"
+        resp = httpx.get(
+            f"{base}/rest/v1/contacts",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            params={"or": or_filter, "limit": "10"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if not rows:
+            return ""
+        lines = ["[КОНТАКТЫ ПРАВООБЛАДАТЕЛЕЙ (заполни поля Правообладатель и Контакт из этих данных):"]
+        for r in rows:
+            first = r.get("first_name") or ""
+            last = r.get("last_name") or ""
+            name = f"{first} {last}".strip()
+            owner = r.get("owner_type") or ""
+            email = r.get("email") or ""
+            role = r.get("adittional_info") or ""
+            parts = [f"• {owner}"]
+            if name:
+                parts.append(f"— {name}")
+            if role:
+                parts.append(f"({role})")
+            if email:
+                parts.append(f"| {email}")
+            lines.append(" ".join(parts))
+        lines.append("]")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"Contacts by label search error: {e}")
+        return ""
+
+
+def search_supabase_tracks(query: str) -> str:
+    """Search tracks table by title/artist → extract label → look up label contacts.
+    Returns combined track info + rights holder contacts or ''."""
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not base or not key:
+        return ""
+    try:
+        terms = _extract_search_terms(query)
+        if not terms:
+            terms = [query.strip()]
+        all_terms: list[str] = []
+        for term in terms[:5]:
+            all_terms.extend(_stem_ru(term))
+
+        conditions = []
+        for term in all_terms[:12]:
+            t = term.replace("*", "").replace("(", "").replace(")", "")
+            for col in ("title", "artist", "album"):
+                conditions.append(f"{col}.ilike.*{t}*")
+        or_filter = f"({','.join(conditions)})"
+
+        resp = httpx.get(
+            f"{base}/rest/v1/tracks",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            params={
+                "or": or_filter,
+                "select": "title,artist,album,label,lyrics_author,music_author,link",
+                "limit": "8",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if not rows:
+            return ""
+
+        labels_found: set[str] = set()
+        lines = ["[ТРЕКИ ИЗ БАЗЫ SYNC LAB:"]
+        for r in rows:
+            title = r.get("title") or ""
+            artist = r.get("artist") or ""
+            label = r.get("label") or ""
+            lyrics_author = r.get("lyrics_author") or ""
+            music_author = r.get("music_author") or ""
+            parts = [f"• «{title}»"]
+            if artist:
+                parts.append(f"— {artist}")
+            if label:
+                parts.append(f"| Лейбл: {label}")
+                labels_found.add(label)
+            if lyrics_author:
+                parts.append(f"| Автор текста: {lyrics_author}")
+            if music_author:
+                parts.append(f"| Автор музыки: {music_author}")
+            lines.append(" ".join(parts))
+        lines.append("]")
+        track_ctx = "\n".join(lines)
+
+        # Auto-lookup contacts for found labels
+        if labels_found:
+            contacts_ctx = search_contacts_by_labels(list(labels_found))
+            if contacts_ctx:
+                return track_ctx + "\n\n" + contacts_ctx
+        return track_ctx
+    except Exception as e:
+        logger.warning(f"Supabase tracks search error: {e}")
+        return ""
+
+
 def search_supabase_contacts(query: str) -> str:
     """Search Supabase contacts by individual terms (ilike per word). Returns formatted context or ''."""
     import httpx
@@ -1181,17 +1299,19 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
     try:
         loop = asyncio.get_event_loop()
 
-        # Search Supabase + Asana + Tavily in parallel, inject context before LLM
+        # Search tracks→labels→contacts + contacts directly + Asana + web in parallel
         from syncoteca.tools.tavily_search_tool import TavilySearchTool
         _tavily = TavilySearchTool()
-        sb_ctx, asana_ctx, web_ctx = await asyncio.gather(
+        tracks_ctx, sb_ctx, asana_ctx, web_ctx = await asyncio.gather(
+            loop.run_in_executor(None, search_supabase_tracks, user_request),
             loop.run_in_executor(None, search_supabase_contacts, user_request),
             loop.run_in_executor(None, search_asana_contacts, user_request),
             loop.run_in_executor(None, _tavily._run, user_request),
         )
         if web_ctx:
             web_ctx = f"[ВЕБ-ПОИСК (используй для контекста о бренде/треке/исполнителе):\n{web_ctx}\n]"
-        db_context = "\n\n".join(c for c in [sb_ctx, asana_ctx, web_ctx] if c)
+        # tracks_ctx already includes label contacts — put first so Rico sees it first
+        db_context = "\n\n".join(c for c in [tracks_ctx, sb_ctx, asana_ctx, web_ctx] if c)
         enriched = f"{db_context}\n\n{user_request}" if db_context else user_request
 
         result = await loop.run_in_executor(
