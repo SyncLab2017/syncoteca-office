@@ -593,11 +593,19 @@ def parse_briefing_intent(text: str) -> dict:
         date_range = "today"
 
     # Person filter — order matters: check specific names before "me"
-    if any(w in lower for w in ("екатерин", "катер", "катя", "кати")):
+    _kate_words = (
+        "екатерин", "катер", "катя", "кати",          # RU
+        "kate", "katya", "katy", "katie", "ekaterina", # EN
+    )
+    _alex_words = (
+        "александр", "александр", "саш", "алекс", "саня",  # RU
+        "alex", "sasha", "alexander", "alexandra", "alexa", "sash",  # EN
+    )
+    if any(w in lower for w in _kate_words):
         filter_person = "ekaterina"
-    elif any(w in lower for w in ("александр", "саш", "алекс", "саня")):
+    elif any(w in lower for w in _alex_words):
         filter_person = "alexander"
-    elif any(w in lower for w in ("мои", "моих", "у меня", "мне", "только мои")):
+    elif any(w in lower for w in ("мои", "моих", "у меня", "мне", "только мои", "my", "mine")):
         filter_person = "me"
     else:
         filter_person = None  # all people
@@ -1346,6 +1354,8 @@ def _is_briefing_intent(text: str) -> bool:
         "завтра", "следующ", "будущ", "недел",
         "екатерин", "катер", "катя", "кати",
         "александр", "саш", "алекс", "саня",
+        "kate", "katya", "katy", "katie", "ekaterina",
+        "alex", "sasha", "alexander", "alexandra", "alexa",
     )
     has_scope = any(w in lower for w in scope_words)
     return has_tasks or (has_scope and any(w in lower for w in ("задач", "дел", "план")))
