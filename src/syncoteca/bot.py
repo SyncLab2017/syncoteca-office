@@ -297,16 +297,24 @@ def search_contacts_by_labels(label_names: list[str]) -> str:
     try:
         conditions = []
         for label in label_names[:5]:
-            slug = label[:25].replace("*", "").replace("(", "").replace(")", "").strip()
-            if slug:
-                conditions.append(f"owner_type.ilike.*{slug}*")
-        if not conditions:
+            clean = label.replace("*", "").replace("(", "").replace(")", "").strip()
+            # Split multi-word labels into per-word conditions — PostgREST OR filter
+            # doesn't handle spaces in ilike values reliably ("ПМИ / ПЕРВОЕ МУЗЫКАЛЬНОЕ"
+            # won't match "Первое музыкальное" as a single multi-word slug).
+            for word in clean.split():
+                w = word.strip("/–-")
+                if len(w) >= 4:
+                    conditions.append(f"owner_type.ilike.*{w}*")
+        # deduplicate while preserving order
+        seen: set[str] = set()
+        uniq_conds = [c for c in conditions if not (c in seen or seen.add(c))]  # type: ignore[func-returns-value]
+        if not uniq_conds:
             return ""
-        or_filter = f"({','.join(conditions)})"
+        or_filter = f"({','.join(uniq_conds[:20])})"
         resp = httpx.get(
             f"{base}/rest/v1/contacts",
             headers={"apikey": key, "Authorization": f"Bearer {key}"},
-            params={"or": or_filter, "limit": "10"},
+            params={"or": or_filter, "limit": "15"},
             timeout=10,
         )
         resp.raise_for_status()
