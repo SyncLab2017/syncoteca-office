@@ -251,6 +251,20 @@ _SEARCH_STOP_WORDS = {
     "find", "search", "contacts", "contact", "the", "a", "an", "of", "for",
 }
 
+# Extra noise words specific to track/song searches — these match random tracks
+# (e.g. "трек" appears in many song titles) and pollute the OR filter.
+_TRACK_SEARCH_NOISE = _SEARCH_STOP_WORDS | {
+    "трек", "треку", "треке", "трека", "треков", "треки",
+    "песня", "песни", "песне", "песню", "песен",
+    "музыка", "музыки", "музыке", "музыку",
+    "информация", "информации", "информацию",
+    "правам", "правах", "права", "право", "правами",
+    "лицензия", "лицензии", "лицензию", "лицензирование",
+    "права", "right", "rights", "track", "song", "music", "info",
+    "хочу", "хочется", "узнать", "знать", "дать", "дай",
+    "нужно", "нужен", "нужна", "нужны",
+}
+
 _RU_VOWELS = set("аеёиоуыэюя")
 _RU_ENDINGS = set("аеёиоуыэюяйь")
 
@@ -330,15 +344,19 @@ def search_supabase_tracks(query: str) -> str:
     if not base or not key:
         return ""
     try:
-        terms = _extract_search_terms(query)
+        # Strip track-domain noise words so "трек", "информация", "права" don't
+        # fill the limit with false-positive matches before the real title terms.
+        words = [w.strip(".,!?:;'\"()[]").lower() for w in query.split()]
+        terms = [w for w in words if len(w) > 2 and w not in _TRACK_SEARCH_NOISE]
         if not terms:
-            terms = [query.strip()]
+            terms = _extract_search_terms(query) or [query.strip()]
+
         all_terms: list[str] = []
-        for term in terms[:5]:
+        for term in terms[:6]:
             all_terms.extend(_stem_ru(term))
 
         conditions = []
-        for term in all_terms[:12]:
+        for term in all_terms[:18]:
             t = term.replace("*", "").replace("(", "").replace(")", "")
             for col in ("title", "artist", "album"):
                 conditions.append(f"{col}.ilike.*{t}*")
@@ -350,7 +368,7 @@ def search_supabase_tracks(query: str) -> str:
             params={
                 "or": or_filter,
                 "select": "title,artist,album,label,lyrics_author,music_author,link",
-                "limit": "8",
+                "limit": "15",
             },
             timeout=10,
         )
