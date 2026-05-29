@@ -398,17 +398,11 @@ def search_supabase_tracks(query: str) -> str:
             terms = _extract_search_terms(query) or [query.strip()]
         logger.info(f"Track search terms: {terms} (from: {query[:80]})")
 
-        all_terms: list[str] = []
-        for term in terms[:6]:
-            all_terms.extend(_stem_ru(term))
-
-        conditions = []
-        for term in all_terms[:18]:
-            t = term.replace("*", "").replace("(", "").replace(")", "")
-            for col in ("title", "artist", "album"):
-                conditions.append(f"{col}.ilike.*{t}*")
+        # Build plainto_tsquery string: join all terms (Postgres FTS handles inflection)
+        fts_q = " ".join(t.replace("(", "").replace(")", "").replace("'", "") for t in terms[:6])
+        conditions = [f"{col}.fts(russian).{fts_q}" for col in ("title", "artist", "album")]
         or_filter = f"({','.join(conditions)})"
-        logger.info(f"Track OR filter: {or_filter[:200]}")
+        logger.info(f"Track FTS filter: {or_filter[:200]}")
 
         resp = httpx.get(
             f"{base}/rest/v1/tracks",
