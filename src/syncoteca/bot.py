@@ -628,8 +628,8 @@ def format_morning_briefing(data: dict, date_range: str = "today") -> str:
 
     # --- Today view: split today / overdue, grouped by person ---
     if dr == "today":
-        today_tasks = data.get("today", [])
-        overdue_tasks = data.get("overdue", [])
+        today_tasks = [t for t in data.get("today", []) if (t.get("assignee") or {}).get("name")]
+        overdue_tasks = [t for t in data.get("overdue", []) if (t.get("assignee") or {}).get("name")]
         total = len(today_tasks) + len(overdue_tasks)
 
         lines = [f"{header}\n"]
@@ -664,7 +664,7 @@ def format_morning_briefing(data: dict, date_range: str = "today") -> str:
         return "\n".join(lines)
 
     # --- Week / tomorrow view: grouped by person, date shown per task ---
-    tasks = data.get("tasks", [])
+    tasks = [t for t in data.get("tasks", []) if (t.get("assignee") or {}).get("name")]
     total = len(tasks)
     lines = [f"{header}\n"]
 
