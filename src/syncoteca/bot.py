@@ -482,6 +482,7 @@ def search_supabase_tracks(query: str) -> str:
             label = r.get("label") or ""
             lyrics_author = r.get("lyrics_author") or ""
             music_author = r.get("music_author") or ""
+            link = r.get("link") or ""
             parts = [f"• «{title}»"]
             if artist:
                 parts.append(f"— {artist}")
@@ -492,6 +493,8 @@ def search_supabase_tracks(query: str) -> str:
                 parts.append(f"| Автор текста: {lyrics_author}")
             if music_author:
                 parts.append(f"| Автор музыки: {music_author}")
+            if link:
+                parts.append(f"| Ссылка: {link}")
             lines.append(" ".join(parts))
         lines.append("]")
         track_ctx = "\n".join(lines)
