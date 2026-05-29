@@ -553,57 +553,15 @@ def _get_asana_user_gid(person_key: str) -> str | None:
     return None
 
 
-# Personal "My Tasks" project IDs — override with env vars in Railway
-_PERSONAL_PROJECT_IDS = {
-    "alexandra": "1201138547007410",  # https://app.asana.com/.../project/1201138547007410
-    "ekaterina": "911206717671835",   # https://app.asana.com/.../project/911206717671835
+# Confirmed team GIDs (from /asana_debug). Override with ASANA_GID_ALEXANDRA / ASANA_GID_EKATERINA
+_TEAM_GIDS = {
+    "alexandra": "1201138547007400",  # Alexandra Guseva (alexa.sp@yandex.ru)
+    "ekaterina": "911206717671832",   # Kate Timashova (kate@synclab.pro)
 }
 
 
-def _fetch_tasks_from_project(project_id: str, after: str, before: str) -> list:
-    """Fetch incomplete tasks from a project, filter by due date post-fetch."""
-    token = os.getenv("ASANA_TOKEN", "")
-    if not token:
-        return []
-    tasks = []
-    offset = None
-    while True:
-        params: dict = {
-            "opt_fields": "name,due_on,completed,assignee.name,permalink_url",
-            "completed": "false",
-            "limit": "100",
-        }
-        if offset:
-            params["offset"] = offset
-        try:
-            resp = httpx.get(
-                f"https://app.asana.com/api/1.0/projects/{project_id}/tasks",
-                headers={"Authorization": f"Bearer {token}"},
-                params=params,
-                timeout=15,
-            )
-            resp.raise_for_status()
-            body = resp.json()
-            tasks.extend(body.get("data", []))
-            next_page = body.get("next_page")
-            if next_page and next_page.get("offset"):
-                offset = next_page["offset"]
-            else:
-                break
-        except Exception as e:
-            logger.warning(f"Project tasks fetch error ({project_id}): {e}")
-            break
-    # Apply date bounds post-fetch
-    if before:
-        tasks = [t for t in tasks if t.get("due_on") and t["due_on"] < before]
-    if after:
-        tasks = [t for t in tasks if t.get("due_on") and t["due_on"] > after]
-    return tasks
-
-
 def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = None) -> dict:
-    """Fetch Asana tasks for given date_range.
-    filter_person: None=all, 'me'=current user GID, 'ekaterina'/'alexandra'=project or GID filter."""
+    """Fetch Asana tasks for given date_range via workspace search + assignee.any GID filter."""
     import datetime
     token = os.getenv("ASANA_TOKEN", "")
     workspace_id = os.getenv("ASANA_WORKSPACE_ID", "331121027676371")
@@ -613,21 +571,6 @@ def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = 
     after, before = _briefing_date_bounds(date_range)
 
     try:
-        # For team members with known personal project IDs, fetch directly — more reliable
-        if filter_person in ("alexandra", "ekaterina"):
-            env_key = f"ASANA_PROJECT_{filter_person.upper()}"
-            personal_project = os.getenv(env_key, _PERSONAL_PROJECT_IDS.get(filter_person, ""))
-            if personal_project:
-                tasks = _fetch_tasks_from_project(personal_project, after, before)
-                today_str = datetime.date.today().isoformat()
-                if date_range == "today":
-                    today_tasks = [t for t in tasks if t.get("due_on") == today_str]
-                    overdue_tasks = [t for t in tasks if t.get("due_on") and t["due_on"] < today_str]
-                    return {"today": today_tasks, "overdue": overdue_tasks,
-                            "date_range": date_range, "filter_person": filter_person}
-                else:
-                    return {"tasks": tasks, "date_range": date_range, "filter_person": filter_person}
-
         headers = {"Authorization": f"Bearer {token}"}
         params: dict = {
             "opt_fields": "name,due_on,completed,assignee.name,permalink_url",
@@ -638,15 +581,19 @@ def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = 
             params["due_on.before"] = before
         if after:
             params["due_on.after"] = after
-        # Resolve assignee GID and filter server-side
+
+        # Resolve GID for server-side assignee filter
         if filter_person == "me":
             gid = _get_asana_me_gid()
         elif filter_person in ("alexandra", "ekaterina"):
-            gid = _get_asana_user_gid(filter_person)
+            env_key = f"ASANA_GID_{filter_person.upper()}"
+            gid = os.getenv(env_key) or _TEAM_GIDS.get(filter_person) or _get_asana_user_gid(filter_person)
         else:
             gid = None
+
         if gid:
             params["assignee.any"] = gid
+            logger.info(f"Briefing: assignee.any={gid} for filter_person={filter_person}")
 
         resp = httpx.get(
             f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/tasks/search",
@@ -656,6 +603,7 @@ def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = 
         )
         resp.raise_for_status()
         tasks = resp.json().get("data", [])
+        logger.info(f"Briefing: {len(tasks)} tasks returned from workspace search (filter={filter_person}, gid={gid})")
 
         today_str = datetime.date.today().isoformat()
 
