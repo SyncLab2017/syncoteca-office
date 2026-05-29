@@ -263,6 +263,10 @@ _TRACK_SEARCH_NOISE = _SEARCH_STOP_WORDS | {
     "права", "right", "rights", "track", "song", "music", "info",
     "хочу", "хочется", "узнать", "знать", "дать", "дай",
     "нужно", "нужен", "нужна", "нужны",
+    # "group/band" words — meta-query words, not part of track name
+    "группы", "группа", "группе", "группу", "группой", "группах", "group", "band",
+    "называется", "зовётся", "зовется", "под", "названием", "артист", "артиста",
+    "исполнитель", "исполнителя", "исполнителем",
 }
 
 _RU_VOWELS = set("аеёиоуыэюя")
@@ -361,6 +365,7 @@ def search_supabase_tracks(query: str) -> str:
         terms = [w for w in words if len(w) > 1 and w not in _TRACK_SEARCH_NOISE]
         if not terms:
             terms = _extract_search_terms(query) or [query.strip()]
+        logger.info(f"Track search terms: {terms} (from: {query[:80]})")
 
         all_terms: list[str] = []
         for term in terms[:6]:
@@ -372,6 +377,7 @@ def search_supabase_tracks(query: str) -> str:
             for col in ("title", "artist", "album"):
                 conditions.append(f"{col}.ilike.*{t}*")
         or_filter = f"({','.join(conditions)})"
+        logger.info(f"Track OR filter: {or_filter[:200]}")
 
         resp = httpx.get(
             f"{base}/rest/v1/tracks",
