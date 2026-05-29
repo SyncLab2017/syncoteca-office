@@ -1443,12 +1443,13 @@ async def handle_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/stop — clear sticky agent, return to coordinator."""
+    """/stop — clear sticky agent, teach mode, return to coordinator."""
     if not _is_owner(update):
         return await _deny(update)
     chat_id = update.effective_chat.id
     ACTIVE_AGENT.pop(chat_id, None)
     _clear_active_agent(chat_id)
+    TEACH_SESSIONS.pop(chat_id, None)
     LICENSE_SESSIONS[chat_id] = []
     await update.message.reply_text("🎯 Вернулся к координатору. Пиши задачу.")
 
