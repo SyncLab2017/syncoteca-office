@@ -556,9 +556,9 @@ def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = 
         tasks = resp.json().get("data", [])
 
         # Name-based filter for Ekaterina / Alexander
-        if filter_person in ("ekaterina", "alexander"):
-            env_key = f"ASANA_NAME_{'EKATERINA' if filter_person == 'ekaterina' else 'ALEXANDER'}"
-            name_fragment = os.getenv(env_key, filter_person).lower()
+        if filter_person in ("ekaterina", "alexandra"):
+            env_key = f"ASANA_NAME_{'EKATERINA' if filter_person == 'ekaterina' else 'ALEXANDRA'}"
+            name_fragment = os.getenv(env_key, "александра" if filter_person == "alexandra" else filter_person).lower()
             tasks = [
                 t for t in tasks
                 if name_fragment in ((t.get("assignee") or {}).get("name", "") or "").lower()
@@ -604,7 +604,7 @@ def parse_briefing_intent(text: str) -> dict:
     if any(w in lower for w in _kate_words):
         filter_person = "ekaterina"
     elif any(w in lower for w in _alex_words):
-        filter_person = "alexander"
+        filter_person = "alexandra"
     elif any(w in lower for w in ("мои", "моих", "у меня", "мне", "только мои", "my", "mine")):
         filter_person = "me"
     else:
