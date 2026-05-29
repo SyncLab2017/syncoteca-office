@@ -556,7 +556,7 @@ def _get_asana_user_gid(person_key: str) -> str | None:
 # Personal "My Tasks" project IDs — override with env vars in Railway
 _PERSONAL_PROJECT_IDS = {
     "alexandra": "1201138547007410",  # https://app.asana.com/.../project/1201138547007410
-    "ekaterina": "",  # set ASANA_PROJECT_EKATERINA in Railway when known
+    "ekaterina": "911206717671835",   # https://app.asana.com/.../project/911206717671835
 }
 
 
