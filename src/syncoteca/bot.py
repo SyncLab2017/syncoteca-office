@@ -555,13 +555,20 @@ def fetch_asana_briefing(date_range: str = "today", filter_person: str | None = 
         resp.raise_for_status()
         tasks = resp.json().get("data", [])
 
-        # Name-based filter for Ekaterina / Alexander
+        # Name-based filter for Ekaterina / Alexandra
         if filter_person in ("ekaterina", "alexandra"):
             env_key = f"ASANA_NAME_{'EKATERINA' if filter_person == 'ekaterina' else 'ALEXANDRA'}"
-            name_fragment = os.getenv(env_key, "александра" if filter_person == "alexandra" else filter_person).lower()
+            env_val = os.getenv(env_key, "").lower()
+            if env_val:
+                name_fragments = [env_val]
+            elif filter_person == "alexandra":
+                name_fragments = ["alexandra", "александра"]  # try Latin first (most Asana accounts)
+            else:
+                name_fragments = ["ekaterina", "kate", "екатерин"]
             tasks = [
                 t for t in tasks
-                if name_fragment in ((t.get("assignee") or {}).get("name", "") or "").lower()
+                if any(f in ((t.get("assignee") or {}).get("name", "") or "").lower()
+                       for f in name_fragments)
             ]
 
         today_str = datetime.date.today().isoformat()
