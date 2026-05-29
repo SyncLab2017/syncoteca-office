@@ -282,10 +282,13 @@ def _stem_ru(term: str) -> list[str]:
     return variants
 
 
+_QUOTE_CHARS = ".,!?:;'\"()[]«»„“”‹›–—"
+
+
 def _extract_search_terms(text: str) -> list[str]:
     """Extract meaningful search terms, removing Russian/English stop words."""
-    words = [w.strip(".,!?:;'\"()[]").lower() for w in text.split()]
-    return [w for w in words if len(w) > 2 and w not in _SEARCH_STOP_WORDS]
+    words = [w.strip(_QUOTE_CHARS).lower() for w in text.split()]
+    return [w for w in words if len(w) > 1 and w not in _SEARCH_STOP_WORDS]
 
 
 def search_contacts_by_labels(label_names: list[str]) -> str:
@@ -354,8 +357,8 @@ def search_supabase_tracks(query: str) -> str:
     try:
         # Strip track-domain noise words so "трек", "информация", "права" don't
         # fill the limit with false-positive matches before the real title terms.
-        words = [w.strip(".,!?:;'\"()[]").lower() for w in query.split()]
-        terms = [w for w in words if len(w) > 2 and w not in _TRACK_SEARCH_NOISE]
+        words = [w.strip(_QUOTE_CHARS).lower() for w in query.split()]
+        terms = [w for w in words if len(w) > 1 and w not in _TRACK_SEARCH_NOISE]
         if not terms:
             terms = _extract_search_terms(query) or [query.strip()]
 
