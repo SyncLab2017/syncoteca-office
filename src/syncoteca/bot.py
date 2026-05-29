@@ -402,17 +402,27 @@ def search_supabase_tracks(query: str) -> str:
             terms = _extract_search_terms(query) or [query.strip()]
         logger.info(f"Track search terms: {terms} (from: {query[:80]})")
 
-        # Per-term ilike OR conditions: each term searched independently across all three columns.
-        # PostgREST plfts on text columns doesn't respect the language config for the document
-        # side (uses default tsconfig, not russian) → always returns 0. ilike is reliable.
+        # Build ilike OR conditions. Add phrase condition first (all terms joined) so
+        # "Агата Кристи" matches the exact artist field before per-word fallbacks.
+        def _clean(s: str) -> str:
+            return s.replace("(", "").replace(")", "").replace("'", "").replace("*", "")
+
         conditions = []
-        for term in terms[:8]:
-            t = term.replace("(", "").replace(")", "").replace("'", "").replace("*", "")
-            if len(t) >= 2:
-                for col in ("title", "artist", "album"):
-                    conditions.append(f"{col}.ilike.*{t}*")
-        if not conditions:
+        clean_terms = [_clean(t) for t in terms[:8] if len(_clean(t)) >= 2]
+        if not clean_terms:
             return ""
+
+        # Priority: full-phrase match on artist/title (catches "Агата Кристи" as one unit)
+        if len(clean_terms) > 1:
+            phrase = " ".join(clean_terms)
+            conditions.append(f"artist.ilike.*{phrase}*")
+            conditions.append(f"title.ilike.*{phrase}*")
+
+        # Per-term fallback across all columns
+        for t in clean_terms:
+            for col in ("title", "artist", "album"):
+                conditions.append(f"{col}.ilike.*{t}*")
+
         or_filter = f"({','.join(conditions)})"
         logger.info(f"Track ilike filter: {or_filter[:200]}")
 
@@ -422,7 +432,7 @@ def search_supabase_tracks(query: str) -> str:
             params={
                 "or": or_filter,
                 "select": "title,artist,album,label,lyrics_author,music_author,link",
-                "limit": "30",
+                "limit": "200",
             },
             timeout=10,
         )
@@ -432,7 +442,7 @@ def search_supabase_tracks(query: str) -> str:
             return ""
 
         labels_found: set[str] = set()
-        count_note = f" (показаны первые {len(rows)}, может быть больше)" if len(rows) >= 30 else f" (всего найдено: {len(rows)})"
+        count_note = f" (показаны первые {len(rows)}, может быть больше)" if len(rows) >= 200 else f" (всего найдено: {len(rows)})"
         lines = [f"[ТРЕКИ ИЗ БАЗЫ SYNC LAB{count_note}:"]
         for r in rows:
             title = r.get("title") or ""
