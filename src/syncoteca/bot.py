@@ -1531,6 +1531,64 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
         await thinking_msg.edit_text(f"Ошибка координатора: {e}")
 
 
+async def handle_asana_debug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/asana_debug — diagnose Asana API connectivity and project access."""
+    if not _is_owner(update):
+        return await _deny(update)
+    thinking = await update.message.reply_text("🔍 Диагностика Asana…")
+    token = os.getenv("ASANA_TOKEN", "")
+    workspace_id = os.getenv("ASANA_WORKSPACE_ID", "331121027676371")
+    lines = []
+
+    if not token:
+        await thinking.edit_text("❌ ASANA_TOKEN не задан в Railway")
+        return
+
+    # 1. Current user
+    try:
+        r = httpx.get("https://app.asana.com/api/1.0/users/me",
+                      headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        me = r.json().get("data", {})
+        lines.append(f"✅ Токен OK: {me.get('name')} ({me.get('email')})")
+    except Exception as e:
+        lines.append(f"❌ /users/me: {e}")
+
+    # 2. Workspace users — find Alexandra and Kate
+    try:
+        r = httpx.get(f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/users",
+                      headers={"Authorization": f"Bearer {token}"},
+                      params={"opt_fields": "gid,name,email"}, timeout=10)
+        r.raise_for_status()
+        users = r.json().get("data", [])
+        lines.append(f"✅ Пользователей в workspace: {len(users)}")
+        for u in users:
+            if any(k in (u.get("email") or "").lower() for k in ("alexa", "kate")):
+                lines.append(f"   👤 {u.get('name')} | {u.get('email')} | gid={u.get('gid')}")
+    except Exception as e:
+        lines.append(f"❌ /workspace/users: {e}")
+
+    # 3. Direct project fetch
+    import datetime
+    today = datetime.date.today().isoformat()
+    for label, pid in [("Alexandra", "1201138547007410"), ("Kate", "911206717671835")]:
+        try:
+            r = httpx.get(f"https://app.asana.com/api/1.0/projects/{pid}/tasks",
+                          headers={"Authorization": f"Bearer {token}"},
+                          params={"opt_fields": "name,due_on,completed", "limit": "10"}, timeout=10)
+            if r.status_code != 200:
+                lines.append(f"❌ {label} project {pid}: HTTP {r.status_code}")
+            else:
+                tasks = r.json().get("data", [])
+                today_cnt = sum(1 for t in tasks if t.get("due_on") == today)
+                lines.append(f"✅ {label} project: {len(tasks)} задач (первые 10), сегодня={today_cnt}")
+                for t in tasks[:3]:
+                    lines.append(f"   • {t.get('name','?')[:50]} | due={t.get('due_on')} | done={t.get('completed')}")
+        except Exception as e:
+            lines.append(f"❌ {label} project fetch: {e}")
+
+    await thinking.edit_text("\n".join(lines))
+
+
 async def handle_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/briefing [tomorrow|week|nextweek] — request briefing on demand."""
     if not _is_owner(update):
@@ -1597,6 +1655,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("remember", handle_memory_add))
     app.add_handler(CommandHandler("stop", handle_stop))
     app.add_handler(CommandHandler("briefing", handle_briefing))
+    app.add_handler(CommandHandler("asana_debug", handle_asana_debug))
 
     for cmd in SLASH_MAP:
         app.add_handler(CommandHandler(cmd, handle_slash_agent))
