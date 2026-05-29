@@ -437,7 +437,8 @@ def search_supabase_tracks(query: str) -> str:
         # Priority 1: extract explicitly quoted strings «...» — these are exact names.
         # Quoted strings bypass noise filtering entirely: no false positives from
         # conversational words like "тебя", "каталоге" filling the DB limit.
-        terms = _extract_quoted_strings(query)
+        quoted_terms = _extract_quoted_strings(query)
+        terms = quoted_terms
         if not terms:
             # Priority 2: noise-filtered word extraction
             words = [w.strip(_QUOTE_CHARS).lower() for w in query.split()]
@@ -466,9 +467,12 @@ def search_supabase_tracks(query: str) -> str:
             if tphrase != phrase:
                 conditions.append(f"artist.ilike.*{tphrase}*")
 
-        # Per-term fallback across title/artist/album/label
+        # Per-term fallback. Label column only for non-quoted terms (quoted = explicit track
+        # title, not label name — avoids «Мелодия» flooding with Фирма Мелодия tracks).
+        search_label = not bool(quoted_terms)
         for t in clean_terms:
-            for col in ("title", "artist", "album", "label"):
+            cols = ("title", "artist", "album", "label") if search_label else ("title", "artist", "album")
+            for col in cols:
                 conditions.append(f"{col}.ilike.*{t}*")
             # Transliterated variants for Russian terms referencing Latin-stored artists
             # e.g. "наутилуса" → stem "наутилус" → translit "nautilus" → matches "Nautilus Pompilius"
@@ -478,13 +482,14 @@ def search_supabase_tracks(query: str) -> str:
                     if len(tlit) >= 4 and tlit != stem:
                         conditions.append(f"artist.ilike.*{tlit}*")
                         conditions.append(f"title.ilike.*{tlit}*")
-                        conditions.append(f"label.ilike.*{tlit}*")
+                        if search_label:
+                            conditions.append(f"label.ilike.*{tlit}*")
 
         or_filter = f"({','.join(conditions)})"
         logger.info(f"Track ilike filter: {or_filter[:200]}")
 
-        # Detect year range BEFORE fetching — used for post-filter in Python
-        year_from, year_to = _extract_year_range(query)
+        # Year range only for non-quoted queries (avoid filtering "трек «1984»" by year)
+        year_from, year_to = _extract_year_range(query) if not quoted_terms else (None, None)
 
         resp = httpx.get(
             f"{base}/rest/v1/tracks",
@@ -516,13 +521,13 @@ def search_supabase_tracks(query: str) -> str:
         labels_found: set[str] = set()
         count_note = f" (показаны первые {len(rows)}, может быть больше)" if len(rows) >= 200 else f" (всего найдено: {len(rows)})"
         lines = [f"[ТРЕКИ ИЗ БАЗЫ SYNC LAB{count_note}{year_note}:"]
+        # Large result sets (catalog view): compact format to keep context manageable.
+        # Detailed fields (link, authors) only for small results where user needs them.
+        detailed = len(rows) <= 30
         for r in rows:
             title = r.get("title") or ""
             artist = r.get("artist") or ""
             label = r.get("label") or ""
-            lyrics_author = r.get("lyrics_author") or ""
-            music_author = r.get("music_author") or ""
-            link = r.get("link") or ""
             release_date = r.get("release_date") or ""
             parts = [f"• «{title}»"]
             if artist:
@@ -530,15 +535,19 @@ def search_supabase_tracks(query: str) -> str:
             if label:
                 parts.append(f"| Лейбл: {label}")
                 labels_found.add(label)
-            if release_date:
-                yr = _year_from_release_date(release_date)
-                parts.append(f"| Год: {yr}" if yr else f"| Дата: {release_date}")
-            if lyrics_author:
-                parts.append(f"| Автор текста: {lyrics_author}")
-            if music_author:
-                parts.append(f"| Автор музыки: {music_author}")
-            if link:
-                parts.append(f"| Ссылка: {link}")
+            yr = _year_from_release_date(release_date)
+            if yr:
+                parts.append(f"| Год: {yr}")
+            if detailed:
+                lyrics_author = r.get("lyrics_author") or ""
+                music_author = r.get("music_author") or ""
+                link = r.get("link") or ""
+                if lyrics_author:
+                    parts.append(f"| Автор текста: {lyrics_author}")
+                if music_author:
+                    parts.append(f"| Автор музыки: {music_author}")
+                if link:
+                    parts.append(f"| Ссылка: {link}")
             lines.append(" ".join(parts))
         lines.append("]")
         track_ctx = "\n".join(lines)
