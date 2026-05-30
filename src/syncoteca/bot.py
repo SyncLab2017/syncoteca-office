@@ -695,6 +695,25 @@ def search_asana_contacts(query: str) -> str:
         return ""
 
 
+_INJECT_BLOCK_RE = re.compile(
+    r'\[(?:ТРЕКИ ИЗ БАЗЫ[^\]]{0,120}|КОНТАКТЫ ИЗ БАЗЫ[^\]]{0,120}|'
+    r'КОНТАКТЫ ПРАВООБЛАДАТЕЛЕЙ[^\]]{0,120}|ИСТОРИЯ СДЕЛОК[^\]]{0,120}):'
+    r'[\s\S]*?\n\]',
+    re.MULTILINE,
+)
+
+def _compress_old_message(msg: dict) -> dict:
+    """Strip injected data blocks from user messages older than the last 2 turns.
+    Keeps the actual user question; replaces data blocks with a short placeholder.
+    Reduces token cost for long sessions without losing conversation continuity."""
+    if msg["role"] != "user":
+        return msg
+    compressed = _INJECT_BLOCK_RE.sub("[данные из базы]", msg["content"])
+    if compressed == msg["content"]:
+        return msg
+    return {**msg, "content": compressed}
+
+
 def run_license_dialogue(chat_id: int, user_message: str) -> dict:
     """Direct Anthropic API call with conversation history for Рико."""
     import anthropic
@@ -706,16 +725,29 @@ def run_license_dialogue(chat_id: int, user_message: str) -> dict:
     history = LICENSE_SESSIONS[chat_id]
     history.append({"role": "user", "content": today_prefix + user_message})
 
+    # Compress injected data blocks in all messages except the last 4 (2 turns).
+    # This keeps full context for the current work while cutting token cost of
+    # older turns — Rico still sees the full conversation flow, just not stale
+    # bulk track/contact data from previous searches.
+    keep_full = 4
+    if len(history) > keep_full:
+        messages_to_send = (
+            [_compress_old_message(m) for m in history[:-keep_full]]
+            + history[-keep_full:]
+        )
+    else:
+        messages_to_send = history
+
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2048,
         system=LICENSE_SYSTEM_PROMPT,
-        messages=history,
+        messages=messages_to_send,
     )
 
     assistant_text = response.content[0].text
     history.append({"role": "assistant", "content": assistant_text})
-    LICENSE_SESSIONS[chat_id] = history[-20:]
+    LICENSE_SESSIONS[chat_id] = history[-60:]  # 30 turns; compressed history is small
 
     # Try full text first, then extract first JSON object from anywhere in text
     for candidate in [
