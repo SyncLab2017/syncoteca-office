@@ -817,6 +817,52 @@ def save_to_asana(
         return f"❌ Ошибка Asana: {e}"
 
 
+def find_asana_task_by_name(name: str) -> list[dict]:
+    """Search Asana tasks by name fragment. Returns list of {gid, name, due_on, assignee}."""
+    token = os.getenv("ASANA_TOKEN", "")
+    workspace_id = os.getenv("ASANA_WORKSPACE_ID", "331121027676371")
+    if not token:
+        return []
+    try:
+        resp = httpx.get(
+            f"https://app.asana.com/api/1.0/workspaces/{workspace_id}/tasks/search",
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "text": name,
+                "completed": "false",
+                "opt_fields": "gid,name,due_on,assignee.name",
+                "limit": "10",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", [])
+    except Exception:
+        return []
+
+
+def update_asana_task_due(task_gid: str, new_due: str) -> str:
+    """Update due_on for an existing Asana task. new_due must be YYYY-MM-DD."""
+    token = os.getenv("ASANA_TOKEN", "")
+    if not token:
+        return "⚠️ ASANA_TOKEN не настроен"
+    try:
+        resp = httpx.put(
+            f"https://app.asana.com/api/1.0/tasks/{task_gid}",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"data": {"due_on": new_due}},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        task_name = resp.json()["data"].get("name", task_gid)
+        link = f"https://app.asana.com/0/0/{task_gid}"
+        return f"✅ Задача «{task_name}» перенесена на {new_due}\n{link}"
+    except httpx.HTTPStatusError as e:
+        return f"❌ Ошибка Asana {e.response.status_code}: {e.response.text[:300]}"
+    except Exception as e:
+        return f"❌ Ошибка: {e}"
+
+
 # --- Morning briefing ---
 
 _DAY_NAMES_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -1811,6 +1857,28 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
                 ),
             )
             await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{cal_result}")
+        elif action == "reschedule_task":
+            task_name = result.get("task_name", "")
+            new_due = result.get("new_due", "")
+            if not task_name or not new_due:
+                await thinking_msg.edit_text("🎯 Рядовой:\n\n⚠️ Не понял — укажи название задачи и новую дату.")
+            else:
+                await thinking_msg.edit_text(f"🔍 Ищу задачу «{task_name}»…")
+                found = await loop.run_in_executor(None, find_asana_task_by_name, task_name)
+                if not found:
+                    await thinking_msg.edit_text(f"🎯 Рядовой:\n\n❌ Задача «{task_name}» не найдена в Asana.")
+                elif len(found) == 1:
+                    gid = found[0]["gid"]
+                    upd_result = await loop.run_in_executor(None, update_asana_task_due, gid, new_due)
+                    await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{upd_result}")
+                else:
+                    # Multiple matches — show list, ask to clarify
+                    names = "\n".join(
+                        f"• {t['name']} (срок: {t.get('due_on') or 'не задан'})" for t in found[:5]
+                    )
+                    await thinking_msg.edit_text(
+                        f"🎯 Рядовой:\n\nНашёл несколько задач, уточни:\n{names}\n\nСкажи точнее название."
+                    )
         elif action == "asana_task":
             title = result.get("title", text[:80])
             notes = result.get("notes", text)
