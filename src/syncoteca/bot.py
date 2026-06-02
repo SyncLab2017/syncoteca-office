@@ -1817,17 +1817,29 @@ def _is_reschedule_intent(text: str) -> bool:
     return any(v in lower for v in _RESCHEDULE_VERBS) and "задач" in lower
 
 
+_TASK_NAME_NOISE = {
+    "мне", "мне,", "пожалуйста", "прошу", "давай", "пожалуйста,", "прошу,", "давай,",
+    "под", "названием", "название", "именем", "имени", "с", "по",
+}
+_TASK_PREFIX_STRIP = (
+    "под названием ", "с названием ", "под именем ", "по имени ", "название ",
+)
+
+
 def _parse_new_due(date_str: str) -> str | None:
     """Parse natural language date like 'завтра', 'пятницу', '10 июня' → YYYY-MM-DD."""
     import datetime
     today = datetime.date.today()
-    s = date_str.strip().lower()
+    # Strip punctuation and extra words like "день", "дня" that follow the date keyword
+    s = date_str.strip().rstrip(".,!?;:").lower()
 
-    if s in ("завтра", "tomorrow"):
+    # "завтра" / "завтрашний день" / "завтрашнего дня"
+    if s == "завтра" or s.startswith("завтра") or "tomorrow" in s:
         return (today + datetime.timedelta(days=1)).isoformat()
-    if s in ("послезавтра", "day after tomorrow"):
+    # "послезавтра" / "послезавтрашний день"
+    if s.startswith("послезавтра") or "day after tomorrow" in s:
         return (today + datetime.timedelta(days=2)).isoformat()
-    if s in ("сегодня", "today"):
+    if s.startswith("сегодня") or s == "today":
         return today.isoformat()
 
     # "через N дней"
@@ -1871,24 +1883,54 @@ def parse_reschedule_intent(text: str) -> dict:
         if idx >= 0:
             verb_end = max(verb_end, idx + len(v))
 
-    # Find "задачу" after the verb
+    # Find "задач*" keyword after the verb
     task_kw_idx = lower.find("задач", verb_end)
     if task_kw_idx < 0:
         return {"task_name": "", "new_due": ""}
 
-    # Skip past "задачу" / "задачи" word
-    after_kw = task_kw_idx + 6  # len("задачу") = 6
-    # Grab until "на " (the preposition before the date)
-    # Use original case for task_name (better Asana search)
-    remaining = text[after_kw:].strip()
-    # Split on " на " (with space on both sides to avoid "написать" etc.)
-    na_match = re.search(r'\s+на\s+', remaining, re.IGNORECASE)
-    if na_match:
-        task_name = remaining[:na_match.start()].strip()
-        date_part = remaining[na_match.end():].strip()
+    # Skip past the full "задач*" word to its end
+    word_rest = lower[task_kw_idx:]
+    word_boundary = re.search(r'\s', word_rest)
+    after_kw = task_kw_idx + (word_boundary.start() if word_boundary else len(word_rest))
+
+    remaining_orig = text[after_kw:].strip()
+    remaining_lower = remaining_orig.lower()
+
+    # Strip "под названием" / "с названием" / "под именем" prefixes
+    for prefix in _TASK_PREFIX_STRIP:
+        if remaining_lower.startswith(prefix):
+            remaining_orig = remaining_orig[len(prefix):].strip()
+            remaining_lower = remaining_orig.lower()
+            break
+
+    # Check for quoted task name (guillemets, curly quotes, ASCII quotes)
+    quoted = _extract_quoted_strings(remaining_orig)
+    if quoted:
+        task_name = quoted[0]
+        # Find date after the closing quote character
+        last_q = max(
+            remaining_orig.rfind('"'),
+            remaining_orig.rfind(_RQ),
+            remaining_orig.rfind(_RC),
+        )
+        after_quote = remaining_orig[last_q + 1:].strip() if last_q >= 0 else ""
+        date_part = re.sub(r'^на\s+', '', after_quote, flags=re.IGNORECASE).strip()
     else:
-        task_name = remaining.strip()
-        date_part = ""
+        # Split on " на " preposition before the date
+        na_match = re.search(r'\s+на\s+', remaining_orig, re.IGNORECASE)
+        if na_match:
+            task_name = remaining_orig[:na_match.start()].strip()
+            date_part = remaining_orig[na_match.end():].strip()
+        else:
+            task_name = remaining_orig.strip()
+            date_part = ""
+
+    # Strip noise words from task_name (filler, prefix fragments)
+    task_words = [
+        w for w in task_name.split()
+        if w.lower().rstrip(",.!?") not in _TASK_NAME_NOISE
+    ]
+    task_name = " ".join(task_words).strip()
 
     new_due = _parse_new_due(date_part) if date_part else ""
     return {"task_name": task_name, "new_due": new_due}
