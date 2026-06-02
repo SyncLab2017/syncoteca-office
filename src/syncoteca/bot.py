@@ -1791,6 +1791,109 @@ _BRIEFING_KEYWORDS = {
 }
 
 
+_RESCHEDULE_VERBS = (
+    "сдвинь", "сдвини", "сдвинуть", "перенеси", "перенести", "перенесите",
+    "reschedule", "move", "postpone",
+)
+_WEEKDAY_MAP = {
+    "понедельник": 0, "понедельника": 0,
+    "вторник": 1, "вторника": 1,
+    "среду": 2, "среда": 2, "среды": 2,
+    "четверг": 3, "четверга": 3,
+    "пятницу": 4, "пятница": 4, "пятницы": 4,
+    "субботу": 5, "суббота": 5, "субботы": 5,
+    "воскресенье": 6, "воскресенья": 6,
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+_MONTH_MAP = {
+    "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
+    "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
+}
+
+
+def _is_reschedule_intent(text: str) -> bool:
+    lower = text.lower()
+    return any(v in lower for v in _RESCHEDULE_VERBS) and "задач" in lower
+
+
+def _parse_new_due(date_str: str) -> str | None:
+    """Parse natural language date like 'завтра', 'пятницу', '10 июня' → YYYY-MM-DD."""
+    import datetime
+    today = datetime.date.today()
+    s = date_str.strip().lower()
+
+    if s in ("завтра", "tomorrow"):
+        return (today + datetime.timedelta(days=1)).isoformat()
+    if s in ("послезавтра", "day after tomorrow"):
+        return (today + datetime.timedelta(days=2)).isoformat()
+    if s in ("сегодня", "today"):
+        return today.isoformat()
+
+    # "через N дней"
+    m = re.search(r'через\s+(\d+)\s+дн', s)
+    if m:
+        return (today + datetime.timedelta(days=int(m.group(1)))).isoformat()
+
+    # Weekday name → next occurrence
+    for word, wd in _WEEKDAY_MAP.items():
+        if word in s:
+            days_ahead = (wd - today.weekday()) % 7 or 7
+            return (today + datetime.timedelta(days=days_ahead)).isoformat()
+
+    # "10 июня" / "5 мая"
+    m = re.search(r'(\d{1,2})\s+(' + '|'.join(_MONTH_MAP) + r')', s)
+    if m:
+        day, month_word = int(m.group(1)), m.group(2)
+        month = _MONTH_MAP[month_word]
+        year = today.year if month >= today.month else today.year + 1
+        try:
+            return datetime.date(year, month, day).isoformat()
+        except ValueError:
+            return None
+
+    # ISO date fallback
+    m = re.search(r'\d{4}-\d{2}-\d{2}', s)
+    if m:
+        return m.group()
+
+    return None
+
+
+def parse_reschedule_intent(text: str) -> dict:
+    """Extract task_name and new_due from 'Сдвинь задачу X на Y'."""
+    lower = text.lower()
+
+    # Find the verb position
+    verb_end = 0
+    for v in _RESCHEDULE_VERBS:
+        idx = lower.find(v)
+        if idx >= 0:
+            verb_end = max(verb_end, idx + len(v))
+
+    # Find "задачу" after the verb
+    task_kw_idx = lower.find("задач", verb_end)
+    if task_kw_idx < 0:
+        return {"task_name": "", "new_due": ""}
+
+    # Skip past "задачу" / "задачи" word
+    after_kw = task_kw_idx + 6  # len("задачу") = 6
+    # Grab until "на " (the preposition before the date)
+    # Use original case for task_name (better Asana search)
+    remaining = text[after_kw:].strip()
+    # Split on " на " (with space on both sides to avoid "написать" etc.)
+    na_match = re.search(r'\s+на\s+', remaining, re.IGNORECASE)
+    if na_match:
+        task_name = remaining[:na_match.start()].strip()
+        date_part = remaining[na_match.end():].strip()
+    else:
+        task_name = remaining.strip()
+        date_part = ""
+
+    new_due = _parse_new_due(date_part) if date_part else ""
+    return {"task_name": task_name, "new_due": new_due}
+
+
 def _is_briefing_intent(text: str) -> bool:
     lower = text.lower()
     has_tasks = any(w in lower for w in _BRIEFING_KEYWORDS)
@@ -1812,6 +1915,52 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
     thinking_msg = await update.message.reply_text("🎯 Рядовой…")
     try:
         loop = asyncio.get_event_loop()
+
+        # Reschedule intent — check BEFORE briefing (both contain "задач" + date words)
+        if _is_reschedule_intent(text):
+            intent = parse_reschedule_intent(text)
+            task_name = intent["task_name"]
+            new_due = intent["new_due"]
+            if not task_name or not new_due:
+                await thinking_msg.edit_text(
+                    "🎯 Рядовой:\n\n⚠️ Не понял. Скажи: «Сдвинь задачу [название] на [день]»."
+                )
+                return
+            await thinking_msg.edit_text(f"🔍 Ищу задачу «{task_name}»…")
+            found = await loop.run_in_executor(None, find_asana_task_by_name, task_name)
+            if not found:
+                await thinking_msg.edit_text(
+                    f"🎯 Рядовой:\n\n❌ Задача «{task_name}» не найдена в Asana."
+                )
+                return
+            if len(found) == 1:
+                gid = found[0]["gid"]
+                upd = await loop.run_in_executor(None, update_asana_task_due, gid, new_due)
+                # Show updated briefing for the new date after reschedule
+                import datetime
+                try:
+                    new_date = datetime.date.fromisoformat(new_due)
+                    today = datetime.date.today()
+                    if new_date == today:
+                        dr = "today"
+                    elif new_date == today + datetime.timedelta(days=1):
+                        dr = "tomorrow"
+                    else:
+                        dr = "tomorrow"  # default to tomorrow view for other dates
+                    briefing_data = await loop.run_in_executor(None, fetch_asana_briefing, dr, None)
+                    briefing = format_morning_briefing(briefing_data, dr)
+                    await thinking_msg.edit_text(f"{upd}\n\n{briefing}")
+                except Exception:
+                    await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{upd}")
+                return
+            # Multiple matches
+            names = "\n".join(
+                f"• {t['name']} (срок: {t.get('due_on') or 'не задан'})" for t in found[:5]
+            )
+            await thinking_msg.edit_text(
+                f"🎯 Рядовой:\n\nНашёл несколько задач — уточни название:\n{names}"
+            )
+            return
 
         # Briefing intent: pull Asana directly, skip LLM routing
         if _is_briefing_intent(text):
