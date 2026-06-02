@@ -1789,6 +1789,13 @@ _BRIEFING_KEYWORDS = {
     "что сегодня", "что у меня", "что надо", "что нужно сделать",
     "брифинг", "briefing", "дела",
 }
+# Verbs that signal task *creation* — exclude from briefing detection
+_TASK_CREATION_VERBS = (
+    "поставь", "поставить", "создай", "создать", "добавь", "добавить",
+    "занеси", "занести", "запиши", "записать", "сделай", "сделать",
+    "напомни", "напомнить", "зафиксируй", "зафиксировать",
+    "внеси", "внести", "добавь",
+)
 
 
 _RESCHEDULE_VERBS = (
@@ -1938,6 +1945,10 @@ def parse_reschedule_intent(text: str) -> dict:
 
 def _is_briefing_intent(text: str) -> bool:
     lower = text.lower()
+    # Task creation commands ("поставь задачу", "создай задачу в асане") look like
+    # briefing due to "задач*" keyword — exclude them explicitly.
+    if any(v in lower for v in _TASK_CREATION_VERBS) and "задач" in lower:
+        return False
     has_tasks = any(w in lower for w in _BRIEFING_KEYWORDS)
     # Also trigger on date/person scope words even without an explicit task keyword
     scope_words = (
