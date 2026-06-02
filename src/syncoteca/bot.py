@@ -1999,11 +1999,7 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
                         confirm = f"✅ Задачу «{actual_name}» сдвинул на {when}."
                     else:
                         confirm = upd_ok  # error text from API
-                    # Show updated briefing for the new date
-                    dr = "today" if delta == 0 else "tomorrow"
-                    briefing_data = await loop.run_in_executor(None, fetch_asana_briefing, dr, None)
-                    briefing = format_morning_briefing(briefing_data, dr)
-                    await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{confirm}\n\n{briefing}")
+                    await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{confirm}")
                 except Exception:
                     await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{upd_ok}")
                 return
