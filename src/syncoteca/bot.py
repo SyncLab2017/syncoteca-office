@@ -1934,24 +1934,36 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
                 )
                 return
             if len(found) == 1:
-                gid = found[0]["gid"]
-                upd = await loop.run_in_executor(None, update_asana_task_due, gid, new_due)
-                # Show updated briefing for the new date after reschedule
                 import datetime
+                actual_name = found[0].get("name", task_name)
+                gid = found[0]["gid"]
+                upd_ok = await loop.run_in_executor(None, update_asana_task_due, gid, new_due)
                 try:
                     new_date = datetime.date.fromisoformat(new_due)
                     today = datetime.date.today()
-                    if new_date == today:
-                        dr = "today"
-                    elif new_date == today + datetime.timedelta(days=1):
-                        dr = "tomorrow"
+                    delta = (new_date - today).days
+                    # Human-readable date label
+                    day_word = _DAY_NAMES_FULL[new_date.weekday()].lower()
+                    date_ru = f"{new_date.day} {_MONTHS_RU[new_date.month - 1]}"
+                    if delta == 0:
+                        when = f"сегодня, {date_ru} ({day_word})"
+                    elif delta == 1:
+                        when = f"завтра, {date_ru} ({day_word})"
+                    elif delta == 2:
+                        when = f"послезавтра, {date_ru} ({day_word})"
                     else:
-                        dr = "tomorrow"  # default to tomorrow view for other dates
+                        when = f"{day_word}, {date_ru}"
+                    if upd_ok.startswith("✅"):
+                        confirm = f"✅ Задачу «{actual_name}» сдвинул на {when}."
+                    else:
+                        confirm = upd_ok  # error text from API
+                    # Show updated briefing for the new date
+                    dr = "today" if delta == 0 else "tomorrow"
                     briefing_data = await loop.run_in_executor(None, fetch_asana_briefing, dr, None)
                     briefing = format_morning_briefing(briefing_data, dr)
-                    await thinking_msg.edit_text(f"{upd}\n\n{briefing}")
+                    await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{confirm}\n\n{briefing}")
                 except Exception:
-                    await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{upd}")
+                    await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{upd_ok}")
                 return
             # Multiple matches
             names = "\n".join(
