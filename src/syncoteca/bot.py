@@ -1986,12 +1986,49 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _dispatch_coordinator(update, text)
 
 
+def _wrap_forwarded(update) -> str | None:
+    """Return text content of a forwarded message, wrapped with a marker, or None."""
+    msg = update.message
+    if not msg:
+        return None
+    is_forwarded = (
+        getattr(msg, "forward_origin", None) is not None
+        or getattr(msg, "forward_from", None) is not None
+        or getattr(msg, "forward_from_chat", None) is not None
+        or getattr(msg, "forward_sender_name", None) is not None
+    )
+    if not is_forwarded:
+        return None
+    raw = (msg.text or msg.caption or "").strip()
+    if not raw:
+        return None
+    sender = ""
+    origin = getattr(msg, "forward_origin", None)
+    if origin:
+        # PTB v20: MessageOriginUser, MessageOriginChannel, MessageOriginChat, MessageOriginHiddenUser
+        if hasattr(origin, "sender_user") and origin.sender_user:
+            u = origin.sender_user
+            sender = f" от {u.first_name or ''} {u.last_name or ''}".strip()
+        elif hasattr(origin, "sender_user_name") and origin.sender_user_name:
+            sender = f" от {origin.sender_user_name}"
+        elif hasattr(origin, "chat") and origin.chat:
+            sender = f" из канала «{origin.chat.title or ''}»"
+    return f"[ПЕРЕСЛАННОЕ СООБЩЕНИЕ{sender} (Денис переслал как данные для обработки):\n{raw}\n]"
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_owner(update):
         return await _deny(update)
-    text = update.message.text.strip()
-    if not text:
-        return
+
+    # Detect forwarded messages before plain text extraction
+    forwarded_text = _wrap_forwarded(update)
+    if forwarded_text:
+        text = forwarded_text
+    else:
+        raw = (update.message.text or "").strip()
+        if not raw:
+            return
+        text = raw
 
     chat_id = update.effective_chat.id
 
