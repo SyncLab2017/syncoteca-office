@@ -2204,9 +2204,11 @@ async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
         date_limit = ok + 20
         lines.append(
             f"\n❓ Проверить даты релизов по этим трекам через Discogs?\n"
-            f"(~{date_limit} последних треков в базе — скажи «да»)"
+            f"Яндекс Музыка выставил даты — Discogs сверит и найдёт более ранние если есть.\n"
+            f"(~{date_limit} треков, id > {max(0, min_id - 1)} — скажи «да»)"
         )
-        _PENDING_DATE_FIX[chat_id] = {"after_id": max(0, min_id - 1), "limit": date_limit}
+        # only_null=False — verify Yandex-sourced dates too, not just missing ones
+        _PENDING_DATE_FIX[chat_id] = {"after_id": max(0, min_id - 1), "limit": date_limit, "only_null": False}
 
     report = "\n".join(lines)
     await bot.send_message(chat_id, report)
@@ -2230,7 +2232,7 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                         chat_id_early,
                         update.get_bot(),
                         limit=params["limit"],
-                        only_null=True,
+                        only_null=params.get("only_null", False),
                         after_id=params["after_id"],
                     )
                 )
@@ -2853,7 +2855,7 @@ async def handle_fix_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def handle_verify_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/verify_dates [limit] — Re-check ALL tracks with existing dates against Discogs (find earlier years)."""
+    """/verify_dates [limit] [after_id] — Re-check tracks with existing dates against Discogs."""
     if not _is_owner(update):
         return await _deny(update)
 
@@ -2861,17 +2863,22 @@ async def handle_verify_dates(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     args = context.args or []
     limit = 200
+    after_id = 0
     for a in args:
         if a.isdigit():
-            limit = min(int(a), 1000)
+            if limit == 200:
+                limit = min(int(a), 1000)
+            else:
+                after_id = int(a)
 
     chat_id = update.effective_chat.id
+    after_note = f" (id > {after_id})" if after_id else ""
     await update.message.reply_text(
-        f"🗃️ Ковальски: запускаю полную перепроверку дат через Discogs.\n"
-        f"Режим: все треки (в т.ч. уже с датой — ищу более ранние).\n"
+        f"🗃️ Ковальски: запускаю перепроверку дат через Discogs.\n"
+        f"Режим: все треки включая уже с датой — ищу более ранние.{after_note}\n"
         f"Лимит: {limit} | Займёт ~{limit // 60 + 1} мин."
     )
-    asyncio.create_task(run_date_fix(chat_id, context.bot, limit=limit, only_null=False))
+    asyncio.create_task(run_date_fix(chat_id, context.bot, limit=limit, only_null=False, after_id=after_id))
 
 
 async def handle_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
