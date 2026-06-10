@@ -2010,6 +2010,9 @@ def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
                 return f"лейбл {label}"
             year_from = cached.get("year_from")
             if year_from:
+                year_to = cached.get("year_to", year_from)
+                if year_to and year_to != year_from:
+                    return f"{year_from}-{year_to}"
                 return str(year_from)
         elif isinstance(cached, str):
             cached_filters = parse_export_query(cached)
@@ -2062,7 +2065,10 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
 
             # Record tool invocation in session history so context isn't lost
             filters = parse_export_query(export_query)
-            subject = filters.get("artist") or filters.get("label") or str(filters.get("year_from", export_query[:40]))
+            yf = filters.get("year_from")
+            yt = filters.get("year_to", yf)
+            year_subject = f"{yf}-{yt}" if yf and yt and yf != yt else (str(yf) if yf else None)
+            subject = filters.get("artist") or filters.get("label") or year_subject or export_query[:40]
             history = DIRECT_SESSIONS["content_manager"][chat_id]
             history.append({"role": "user", "content": text})
             history.append({"role": "assistant", "content": f"[Выгрузка: {subject} — {count} треков → {filename}]"})
