@@ -1877,6 +1877,14 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "export_anomalies", "выгрузи аномали", "excel аномали", "список аномали",
     )):
         return "export_anomalies"
+    if any(w in lower for w in (
+        "обнови базу", "обогати треки", "обогати базу", "заполни пустые", "пустые треки",
+        "обработай треки", "треки без данных", "запусти обогащение", "обновить базу",
+        "обогащение треков", "enrich", "заполни метаданные", "обнови метаданные",
+        "yandex music обогащение", "обогати через яндекс", "обогати через yandex",
+        "заполни пустые поля", "треки без метаданных",
+    )):
+        return "enrich"
     return None
 
 
@@ -2057,10 +2065,69 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка: {e}")
 
+    elif intent == "enrich":
+        import re as _re
+        m = _re.search(r'\b(\d{1,4})\b', text)
+        limit = min(int(m.group(1)), 1000) if m else 250
+        try:
+            from syncoteca.tools.yandex_enricher import count_empty_tracks
+            total_pending = await loop.run_in_executor(None, count_empty_tracks)
+        except Exception:
+            total_pending = "?"
+        reply = (
+            f"🗃️ Ковальски: иду работать.\n"
+            f"Вижу ~{total_pending} треков без метаданных.\n"
+            f"Обрабатываю пакет: {limit} треков.\n"
+            f"Вернусь с отчётом — займёт ~{limit * 4 // 60} мин."
+        )
+        await update.message.reply_text(reply)
+        history = DIRECT_SESSIONS["content_manager"][chat_id]
+        history.append({"role": "user", "content": text})
+        history.append({"role": "assistant", "content": reply})
+        DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
+        asyncio.create_task(_run_enrich_task(chat_id, update.get_bot(), limit))
+
 
 async def _run_fix_dates_task(chat_id: int, bot, limit: int, only_null: bool) -> None:
     from syncoteca.tools.date_fixer import run_date_fix
     await run_date_fix(chat_id, bot, limit=limit, only_null=only_null)
+
+
+async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
+    from syncoteca.tools.yandex_enricher import enrich_batch
+    import asyncio as _asyncio
+
+    loop = _asyncio.get_event_loop()
+
+    progress_msgs: list[str] = []
+
+    def _progress(done: int, total: int, last_title: str) -> None:
+        progress_msgs.append(f"  ✓ {done}/{total} — {last_title}")
+
+    try:
+        result = await loop.run_in_executor(None, lambda: enrich_batch(limit=limit, progress_cb=_progress))
+    except Exception as e:
+        await bot.send_message(chat_id, f"❌ Ковальски: ошибка обогащения — {e}")
+        return
+
+    ok = result.get("ok", 0)
+    skipped = result.get("skipped", 0)
+    errors = result.get("errors", 0)
+    total = result.get("total", 0)
+
+    lines = ["🗃️ Ковальски: обогащение завершено.", f"Обработано: {total} треков."]
+    if ok:
+        lines.append(f"✅ Успешно: {ok}")
+    if skipped:
+        lines.append(f"⏭ Пропущено (нет ссылки): {skipped}")
+    if errors:
+        lines.append(f"❌ Ошибок: {errors}")
+    if progress_msgs:
+        lines.append("\nПоследние обработанные:")
+        lines.extend(progress_msgs[-5:])
+
+    report = "\n".join(lines)
+    await bot.send_message(chat_id, report)
 
 
 async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
