@@ -40,6 +40,31 @@ _LABEL_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Genre keywords: Russian/English bare words that map to genre_1 search terms
+GENRE_ALIASES: dict[str, str] = {
+    "шансон": "шансон", "chanson": "шансон", "shanson": "шансон",
+    "джаз": "джаз", "jazz": "джаз",
+    "рок": "рок", "rock": "рок",
+    "поп": "поп", "pop": "поп",
+    "классика": "классик", "classical": "классик", "классическая": "классик",
+    "электронная": "electro", "электро": "electro", "electronic": "electro",
+    "хип-хоп": "hip", "хипхоп": "hip", "hip-hop": "hip",
+    "рэп": "rap", "rap": "rap",
+    "фолк": "folk", "folk": "folk",
+    "блюз": "blues", "blues": "blues",
+    "кантри": "country", "country": "country",
+    "металл": "metal", "metal": "metal",
+    "инструментальная": "instrumental", "instrumental": "instrumental",
+    "ambient": "ambient", "эмбиент": "ambient",
+    "ретро": "ретро", "retro": "ретро",
+    "советская": "советск", "советский": "советск",
+}
+
+_GENRE_CONTEXT_RE = re.compile(
+    r"(?:жанр[аеыуой]?|стил[еяьи]?|категори[яи]|genre|style|category)\s+([\w\s-]+?)(?:[.,!?]|$)",
+    re.IGNORECASE,
+)
+
 
 def _strip_quotes(s: str) -> str:
     return re.sub(r'[«»"\']', '', s).strip()
@@ -105,6 +130,17 @@ def parse_export_query(text: str) -> dict:
             ).strip()
             if artist:
                 filters["artist"] = artist
+
+    # Genre: "жанр шансон" / "стиль рок" / "категория джаз" or bare genre keyword
+    m = _GENRE_CONTEXT_RE.search(text)
+    if m:
+        genre_word = m.group(1).strip().lower().rstrip(".,!?;:")
+        filters["genre"] = GENRE_ALIASES.get(genre_word, genre_word)
+    elif not filters.get("genre"):
+        for alias_key, alias_val in GENRE_ALIASES.items():
+            if re.search(r'\b' + re.escape(alias_key) + r'\b', lower):
+                filters["genre"] = alias_val
+                break
 
     # Alias lookup: single known label keyword (e.g. "Мелодия", "Зион")
     if not filters:

@@ -1913,7 +1913,7 @@ _ARTIST_FILLER = {
 
 def _export_filters_are_clean(filters: dict) -> bool:
     """Return True if parsed filters look like a genuine artist/year/label (not conversational noise)."""
-    if filters.get("year_from") or filters.get("label"):
+    if filters.get("year_from") or filters.get("label") or filters.get("genre"):
         return True
     artist = filters.get("artist", "")
     if not artist:
@@ -2077,8 +2077,17 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
         chat_id = update.effective_chat.id
 
         if agent_name == "content_manager":
-            # Pre-fetch catalog context from Supabase, inject into message
-            catalog_ctx = await loop.run_in_executor(None, search_supabase_catalog, user_request)
+            # Skip catalog search for pure conversational affirmations ("да", "ок", "угу")
+            # — they have no search terms, would return irrelevant tracks and confuse LLM.
+            _affirmations = {"да", "нет", "ок", "окей", "угу", "ага", "хорошо", "понял", "ладно", "хорошо"}
+            _is_affirmation = (
+                len(user_request.split()) <= 2
+                and all(w.lower().strip(".,!?!") in _affirmations for w in user_request.split())
+            )
+            if _is_affirmation:
+                catalog_ctx = ""
+            else:
+                catalog_ctx = await loop.run_in_executor(None, search_supabase_catalog, user_request)
             enriched = f"{catalog_ctx}\n\n{user_request}" if catalog_ctx else user_request
             result = await loop.run_in_executor(
                 None, run_direct_agent, agent_name, chat_id, enriched
