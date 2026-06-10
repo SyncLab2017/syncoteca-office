@@ -2847,6 +2847,28 @@ async def handle_fix_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     asyncio.create_task(run_date_fix(chat_id, context.bot, limit=limit, only_null=only_null))
 
 
+async def handle_verify_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/verify_dates [limit] — Re-check ALL tracks with existing dates against Discogs (find earlier years)."""
+    if not _is_owner(update):
+        return await _deny(update)
+
+    from syncoteca.tools.date_fixer import run_date_fix
+
+    args = context.args or []
+    limit = 200
+    for a in args:
+        if a.isdigit():
+            limit = min(int(a), 1000)
+
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(
+        f"🗃️ Ковальски: запускаю полную перепроверку дат через Discogs.\n"
+        f"Режим: все треки (в т.ч. уже с датой — ищу более ранние).\n"
+        f"Лимит: {limit} | Займёт ~{limit // 60 + 1} мин."
+    )
+    asyncio.create_task(run_date_fix(chat_id, context.bot, limit=limit, only_null=False))
+
+
 async def handle_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/export <query> — Kowalski exports catalog to Excel."""
     if not _is_owner(update):
@@ -2989,7 +3011,8 @@ async def post_init(app: Application) -> None:
         BotCommand("stop", "Вернуться к координатору"),
         BotCommand("license", "→ Рико (лицензии, права)"),
         BotCommand("kowalski", "→ Ковальски (контент, каталог, метаданные, даты)"),
-        BotCommand("enrich", "Ковальски / Обогащение треков"),
+        BotCommand("enrich", "Ковальски / Обогащение треков (Яндекс Музыка)"),
+        BotCommand("verify_dates", "Ковальски / Перепроверить даты через Discogs"),
         BotCommand("lawyer", "→ Ксюша (договоры, юрист)"),
         BotCommand("accountant", "→ Марина (роялти, бухгалтерия)"),
         BotCommand("bizdev", "→ Директор по развитию"),
@@ -3024,6 +3047,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("stop", handle_stop))
     app.add_handler(CommandHandler("briefing", handle_briefing))
     app.add_handler(CommandHandler("fix_dates", handle_fix_dates))
+    app.add_handler(CommandHandler("verify_dates", handle_verify_dates))
     app.add_handler(CommandHandler("enrich", handle_enrich))
     app.add_handler(CommandHandler("export", handle_export))
     app.add_handler(CommandHandler("check_catalog", handle_check_catalog))
