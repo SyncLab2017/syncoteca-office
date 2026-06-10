@@ -1192,6 +1192,7 @@ SLASH_MAP = {
     "accountant": "accountant",
     "bizdev": "biz_dev",
     "dev": "developer",
+    "kowalski": "content_manager",
 }
 
 # --- Direct agent prompts (no CrewAI, direct Anthropic call) ---
@@ -2334,6 +2335,7 @@ async def post_init(app: Application) -> None:
         BotCommand("teach_stop", "Завершить режим обучения"),
         BotCommand("memory", "Показать знания: /memory рико"),
         BotCommand("briefing", "Брифинг задач Asana на сегодня"),
+        BotCommand("kowalski", "→ Ковальски (контент, каталог, метаданные)"),
         BotCommand("fix_dates", "Ковальски: проверить даты Discogs /fix_dates [50] [all]"),
         BotCommand("export", "Ковальски: выгрузка в Excel /export S.T.A.L.K.E.R."),
         BotCommand("check_catalog", "Ковальски: аудит аномалий каталога"),
