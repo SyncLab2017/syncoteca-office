@@ -48,22 +48,37 @@ def parse_export_query(text: str) -> dict:
         filters["label"] = m.group(1).strip()
 
     # Artist: "репертуар X" / "исполнитель X" / "группа X" / "артист X"
-    # Also bare words after stripping known stop phrases (if no year/label found)
+    # Handles Russian inflection: группа/группе/группы/группой/группу
     if not filters:
         m = re.search(
-            r"(?:репертуар|исполнитель|группа|артист|artist|band)\s+(.+?)(?:\s*$)",
+            r"(?:репертуар|исполнител[ья]|групп[аеыуойи]?|артист[аеуыой]?|artist|band)\s+(.+?)(?:\s*$)",
             text, re.IGNORECASE,
         )
         if m:
-            filters["artist"] = m.group(1).strip()
+            artist = m.group(1).strip()
+            # Strip trailing noise ("и дай мне Excel", etc.)
+            artist = re.sub(r'\s+(?:и|дай|скинь|в|как|excel|файл|xlsx).*$', '', artist, flags=re.IGNORECASE).strip()
+            if artist:
+                filters["artist"] = artist
         else:
-            # Fallback: everything that isn't a stop word is likely an artist name
-            stop = {"выгрузи", "выгрузка", "экспорт", "экспортируй", "сделай", "дай", "покажи",
-                    "треки", "трек", "музыку", "музыка", "репертуар", "исполнитель", "группа",
-                    "из", "базы", "за", "год", "года", "период", "все", "мне"}
-            words = [w.strip(".,") for w in text.split() if w.lower().strip(".,") not in stop]
-            if words:
+            # Fallback: bare words after stripping known conversational noise
+            # Only use this fallback if text looks like a CLEAN artist query (≤4 words after stripping)
+            stop = {
+                "выгрузи", "выгрузка", "выгрузку", "выгружай", "выгрузить",
+                "экспорт", "экспортируй", "сделай", "дай", "покажи", "скинь",
+                "треки", "трек", "музыку", "музыка", "репертуар", "исполнитель",
+                "группа", "из", "базы", "за", "год", "года", "период", "все", "мне",
+                "пожалуйста", "список", "по", "полный", "полное", "полностью",
+                "файл", "да", "нет", "всё", "отлично", "хорошо", "ладно",
+                "хочу", "нужно", "нужен", "нужны", "можешь", "можно",
+                "дайте", "отчёт", "отчет", "и", "а", "но", "в", "на", "для",
+                "excel", "xlsx", "полный", "полная", "весь", "всю",
+            }
+            words = [w.strip(".,!?") for w in text.split() if w.lower().strip(".,!?") not in stop]
+            # Only trust fallback for short clean queries (pure artist name, not a sentence)
+            if 1 <= len(words) <= 4:
                 filters["artist"] = " ".join(words)
+            # If too many words remain, the text is conversational — don't extract artist
 
     return filters
 

@@ -1832,26 +1832,50 @@ def _kowalski_detect_intent(text: str) -> str | None:
     return None
 
 
+_ARTIST_FILLER = {
+    "да", "нет", "всё", "все", "отлично", "хорошо", "ладно", "пожалуйста",
+    "полный", "полное", "полностью", "список", "по", "и", "а", "но",
+    "excel", "xlsx", "файл", "отчёт", "отчет", "выгрузку", "выгрузи",
+    "дай", "скинь", "покажи", "мне", "нам", "тебе", "там",
+}
+
+
+def _export_filters_are_clean(filters: dict) -> bool:
+    """Return True if parsed filters look like a genuine artist/year/label (not conversational noise)."""
+    if filters.get("year_from") or filters.get("label"):
+        return True
+    artist = filters.get("artist", "")
+    if not artist:
+        return False
+    words = [w.lower().strip(".,!?-") for w in artist.split() if w.strip()]
+    if not words or len(words) > 5:
+        return False
+    filler_count = sum(1 for w in words if w in _ARTIST_FILLER)
+    return filler_count == 0
+
+
 def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
-    """Resolve what to export: use text if it has artist/year/label, else look in history."""
+    """Resolve what to export: use text if it has a clean artist/year/label, else look in history."""
     from syncoteca.tools.catalog_export import parse_export_query
     filters = parse_export_query(text)
-    if filters:
-        return text  # text already has enough signal
+    if _export_filters_are_clean(filters):
+        return text  # text already has clean signal
 
-    # No artist/year/label found — look back at conversation history for last discussed entity
+    # Conversational text — scan session history for last explicitly mentioned entity
     history = DIRECT_SESSIONS["content_manager"].get(chat_id, [])
-    # Scan recent messages (newest first) for the last user query that had DB results
-    for msg in reversed(history[-10:]):
-        role = msg.get("role", "")
+    for msg in reversed(history[-20:]):
+        if msg.get("role") != "user":
+            continue
         content = msg.get("content", "")
-        if role == "user" and "[КАТАЛОГ SYNC LAB" not in content:
-            # This is a user message without injected DB context — extract the subject
-            candidate_filters = parse_export_query(content)
-            if candidate_filters:
-                logger.info(f"Export subject resolved from history: {candidate_filters}")
-                return content
-    return text  # fallback: pass original text, parse_export_query will try its best
+        # Strip injected catalog blocks — they're not user intent
+        clean = re.sub(r'\[КАТАЛОГ SYNC LAB.*?\]', '', content, flags=re.DOTALL).strip()
+        if not clean:
+            continue
+        candidate = parse_export_query(clean)
+        if _export_filters_are_clean(candidate):
+            logger.info(f"Export subject resolved from history: {candidate}")
+            return clean
+    return text  # last resort
 
 
 async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
@@ -1863,13 +1887,22 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
     if intent == "export":
         thinking = await update.message.reply_text("🗃️ Ковальски: формирую Excel…")
         try:
-            from syncoteca.tools.catalog_export import export_catalog
+            from syncoteca.tools.catalog_export import export_catalog, parse_export_query
             export_query = _kowalski_resolve_export_query(text, chat_id)
             logger.info(f"Kowalski export query resolved: {export_query!r}")
             xlsx_bytes, filename, count = await loop.run_in_executor(None, export_catalog, export_query)
+
+            # Record tool invocation in session history so context isn't lost
+            filters = parse_export_query(export_query)
+            subject = filters.get("artist") or filters.get("label") or str(filters.get("year_from", export_query[:40]))
+            history = DIRECT_SESSIONS["content_manager"][chat_id]
+            history.append({"role": "user", "content": text})
+            history.append({"role": "assistant", "content": f"[Выгрузка: {subject} — {count} треков → {filename}]"})
+            DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
+
             if count == 0:
                 await thinking.edit_text(
-                    f"🗃️ Ковальски: по запросу «{export_query[:60]}» треков не найдено.\n"
+                    f"🗃️ Ковальски: по запросу «{subject}» треков не найдено.\n"
                     "Уточни: название исполнителя, год или лейбл."
                 )
                 return
@@ -1877,7 +1910,7 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             await update.message.reply_document(
                 document=io.BytesIO(xlsx_bytes),
                 filename=filename,
-                caption=f"🗃️ SYNC LAB — {count} треков | {export_query[:60]}",
+                caption=f"🗃️ SYNC LAB — {count} треков | {subject}",
             )
             await thinking.delete()
         except Exception as e:
@@ -1889,11 +1922,16 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         limit = min(int(m.group(1)), 500) if m else 50
         only_null = "all" not in text.lower() and "все" not in text.lower()
         asyncio.create_task(_run_fix_dates_task(chat_id, update.get_bot(), limit, only_null))
-        await update.message.reply_text(
+        reply = (
             f"🗃️ Ковальски: запускаю проверку дат Discogs\n"
             f"Лимит: {limit} | {'только без даты' if only_null else 'все треки'}\n"
             f"Займёт ~{limit}с — буду присылать прогресс."
         )
+        await update.message.reply_text(reply)
+        history = DIRECT_SESSIONS["content_manager"][chat_id]
+        history.append({"role": "user", "content": text})
+        history.append({"role": "assistant", "content": reply})
+        DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
 
     elif intent == "check_catalog":
         thinking = await update.message.reply_text("🔍 Ковальски: сканирую каталог на аномалии…")
