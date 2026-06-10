@@ -59,6 +59,7 @@ AGENT_NAMES = {
 
 AGENT_LABELS = {
     "license_manager": "📋 Рико (Лицензионный менеджер)",
+    "content_manager": "🗃️ Ковальски (Контент-менеджер)",
     "lawyer": "⚖️ Ксюша (Юрист)",
     "accountant": "💰 Марина (Бухгалтер)",
     "biz_dev": "🚀 Директор по развитию",
