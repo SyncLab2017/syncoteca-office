@@ -216,17 +216,62 @@ class SupabaseTool(BaseTool):
 
     def _search_tracks(self, query: str | None = None, **_) -> str:
         if not query:
-            return "Provide query= (title, artist, author, label, genre)"
-        or_filter = (
-            f"(title.ilike.*{query}*,"
-            f"artist.ilike.*{query}*,"
-            f"music_author.ilike.*{query}*,"
-            f"lyrics_author.ilike.*{query}*,"
-            f"label.ilike.*{query}*,"
-            f"genre_1.ilike.*{query}*)"
-        )
-        rows = _get("tracks", {"or": or_filter, "limit": "8", "order": "title.asc"})
-        return f"{len(rows)} треков по '{query}':\n" + _fmt(rows)
+            return "Provide query= (title, artist, author, label, genre, year range e.g. '1975-1980')"
+        # Year range extraction
+        import re as _re
+        year_filter = None
+        m = _re.search(r'\b((?:19|20)\d\d)\s*[-–—]\s*((?:19|20)\d\d)\b', query)
+        if m:
+            year_filter = (int(m.group(1)), int(m.group(2)))
+            query = query[:m.start()] + query[m.end():]  # strip from text search
+        else:
+            m = _re.search(r'\b((?:19|20)\d\d)\b', query)
+            if m:
+                year_filter = (int(m.group(1)), int(m.group(1)))
+                query = query[:m.start()] + query[m.end():]
+
+        q = query.strip()
+        params: dict = {"limit": "200", "select": "title,artist,label,music_author,lyrics_author,release_date,link"}
+        if q:
+            or_filter = (
+                f"(title.ilike.*{q}*,"
+                f"artist.ilike.*{q}*,"
+                f"music_author.ilike.*{q}*,"
+                f"lyrics_author.ilike.*{q}*,"
+                f"label.ilike.*{q}*,"
+                f"genre_1.ilike.*{q}*)"
+            )
+            params["or"] = or_filter
+        else:
+            params["order"] = "release_date.asc"
+
+        rows = _get("tracks", params)
+
+        if year_filter:
+            filtered = []
+            for r in rows:
+                rd = r.get("release_date") or ""
+                ym = _re.search(r'\b((?:19|20)\d\d)\b', rd)
+                if ym and year_filter[0] <= int(ym.group(1)) <= year_filter[1]:
+                    filtered.append(r)
+            if filtered:
+                rows = filtered
+
+        lines = []
+        for i, r in enumerate(rows, 1):
+            parts = [f"{i}. «{r.get('title','?')}» — {r.get('artist','?')}"]
+            if r.get("label"):
+                parts.append(f"| Лейбл: {r['label']}")
+            if r.get("release_date"):
+                ym2 = _re.search(r'\b((?:19|20)\d\d)\b', r["release_date"])
+                if ym2:
+                    parts.append(f"| Год: {ym2.group(1)}")
+            if r.get("music_author"):
+                parts.append(f"| Авт. музыки: {r['music_author']}")
+            lines.append(" ".join(parts))
+
+        yr_note = f" ({year_filter[0]}–{year_filter[1]})" if year_filter and year_filter[0] != year_filter[1] else (f" ({year_filter[0]})" if year_filter else "")
+        return f"{len(rows)} треков{yr_note}:\n" + "\n".join(lines)
 
     # --- Agent Memory ---
 
