@@ -1336,6 +1336,7 @@ DIRECT_AGENTS = set(DIRECT_PROMPTS.keys())
 # Accountant needs Sonnet for reliable financial arithmetic
 _DIRECT_AGENT_MODELS: dict[str, str] = {
     "accountant": "claude-sonnet-4-6",
+    "content_manager": "claude-sonnet-4-6",
 }
 _DEFAULT_DIRECT_MODEL = "claude-haiku-4-5-20251001"
 
@@ -1805,8 +1806,12 @@ def _kowalski_detect_intent(text: str) -> str | None:
     """Detect catalog tool intent from natural language. Returns tool name or None."""
     lower = text.lower()
     if any(w in lower for w in (
-        "выгрузи", "выгрузка", "экспорт", "экспортируй", "сделай excel",
+        "выгрузи", "выгрузка", "выгружай", "выгрузить", "выгрузку",
+        "экспорт", "экспортируй", "сделай excel", "сформируй excel",
         "excel по", "excel для", "скачать список", "дай список треков",
+        "дай файл", "пришли файл", "скинь файл", "сделай файл",
+        "полный список", "полную выгрузку", "сделай выгрузку",
+        "сделай отчёт", "сделай отчет", "дай отчёт",
     )):
         return "export"
     if any(w in lower for w in (
@@ -1827,6 +1832,28 @@ def _kowalski_detect_intent(text: str) -> str | None:
     return None
 
 
+def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
+    """Resolve what to export: use text if it has artist/year/label, else look in history."""
+    from syncoteca.tools.catalog_export import parse_export_query
+    filters = parse_export_query(text)
+    if filters:
+        return text  # text already has enough signal
+
+    # No artist/year/label found — look back at conversation history for last discussed entity
+    history = DIRECT_SESSIONS["content_manager"].get(chat_id, [])
+    # Scan recent messages (newest first) for the last user query that had DB results
+    for msg in reversed(history[-10:]):
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role == "user" and "[КАТАЛОГ SYNC LAB" not in content:
+            # This is a user message without injected DB context — extract the subject
+            candidate_filters = parse_export_query(content)
+            if candidate_filters:
+                logger.info(f"Export subject resolved from history: {candidate_filters}")
+                return content
+    return text  # fallback: pass original text, parse_export_query will try its best
+
+
 async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
     """Execute a Kowalski catalog tool triggered by natural language."""
     import io
@@ -1837,15 +1864,20 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         thinking = await update.message.reply_text("🗃️ Ковальски: формирую Excel…")
         try:
             from syncoteca.tools.catalog_export import export_catalog
-            xlsx_bytes, filename, count = await loop.run_in_executor(None, export_catalog, text)
+            export_query = _kowalski_resolve_export_query(text, chat_id)
+            logger.info(f"Kowalski export query resolved: {export_query!r}")
+            xlsx_bytes, filename, count = await loop.run_in_executor(None, export_catalog, export_query)
             if count == 0:
-                await thinking.edit_text(f"🗃️ Ковальски: по запросу треков не найдено.")
+                await thinking.edit_text(
+                    f"🗃️ Ковальски: по запросу «{export_query[:60]}» треков не найдено.\n"
+                    "Уточни: название исполнителя, год или лейбл."
+                )
                 return
             await thinking.edit_text(f"🗃️ Найдено {count} треков, отправляю…")
             await update.message.reply_document(
                 document=io.BytesIO(xlsx_bytes),
                 filename=filename,
-                caption=f"🗃️ SYNC LAB — {count} треков",
+                caption=f"🗃️ SYNC LAB — {count} треков | {export_query[:60]}",
             )
             await thinking.delete()
         except Exception as e:
