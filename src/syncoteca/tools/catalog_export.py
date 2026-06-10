@@ -16,6 +16,35 @@ def _sb_base() -> str:
     return os.getenv("SUPABASE_URL", "").rstrip("/")
 
 
+# Short label aliases: when Denis says just "Мелодия" or "Зион", resolve to label search.
+# Keys are lowercase. Values are the search term passed to label.ilike.*value*.
+LABEL_ALIASES: dict[str, str] = {
+    "мелодия": "Мелодия",
+    "melody": "Мелодия",
+    "зион": "Zion",
+    "zion": "Zion",
+    "джем": "ДЖЕМ",
+    "auris": "Auris",
+    "аурис": "Auris",
+    "dnk": "DNK",
+    "днк": "DNK",
+    "adam": "Adam Music",
+    "balt": "Balt",
+    "golden sound": "Golden Sound",
+}
+
+# Words that signal "label context" — "фирме Мелодия", "компании X", "издательства X"
+_LABEL_CONTEXT_RE = re.compile(
+    r"(?:лейбл[аеыуой]?|label|фирм[аеыуой]|компани[яи]|издательств[аоеу]?|"
+    r"правообладател[яьей]+|рекорд-лейбл[аеыуой]?)\s+([«»\w\s.,-]+?)(?:\s+(?:год|за|и|дай|скинь)|[.,!?]|$)",
+    re.IGNORECASE,
+)
+
+
+def _strip_quotes(s: str) -> str:
+    return s.strip("«»\"'").strip()
+
+
 def parse_export_query(text: str) -> dict:
     """Extract filters from natural-language export request.
 
@@ -24,10 +53,22 @@ def parse_export_query(text: str) -> dict:
       "репертуар S.T.A.L.K.E.R." → {"artist": "S.T.A.L.K.E.R."}
       "треки за 1996 год"         → {"year_from": 1996, "year_to": 1996}
       "период 1975-1980"          → {"year_from": 1975, "year_to": 1980}
-      "лейбл Мелодия"            → {"label": "Мелодия"}
+      "лейбл Мелодия"             → {"label": "Мелодия"}
+      "по фирме «Мелодия»"        → {"label": "Мелодия"}
+      "Мелодия"                   → {"label": "Мелодия"}  (via alias)
     """
     filters: dict = {}
     lower = text.lower()
+
+    # Handle CLI-style flags: --label="X" / --artist="X" (user copied bot suggestion)
+    m = re.search(r'--label=["\']?([^"\']+)["\']?', text, re.IGNORECASE)
+    if m:
+        filters["label"] = _strip_quotes(m.group(1).strip())
+        return filters
+    m = re.search(r'--artist=["\']?([^"\']+)["\']?', text, re.IGNORECASE)
+    if m:
+        filters["artist"] = _strip_quotes(m.group(1).strip())
+        return filters
 
     # Year range: "1975-1980" / "1975–1980"
     m = re.search(r"\b((?:19|20)\d{2})\s*[-–—]\s*((?:19|20)\d{2})\b", text)
@@ -36,49 +77,59 @@ def parse_export_query(text: str) -> dict:
         filters["year_to"] = int(m.group(2))
         return filters  # year range overrides everything
 
-    # Single year: "за 1996 год" / "в 1996" / "1996"
+    # Single year
     m = re.search(r"\b((?:19|20)\d{2})\b", text)
     if m:
         filters["year_from"] = int(m.group(1))
         filters["year_to"] = int(m.group(1))
 
-    # Label: "лейбл X" / "label X"
-    m = re.search(r"(?:лейбл|label)\s+(.+?)(?:\s+год|\s+за|\s*$)", text, re.IGNORECASE)
+    # Label: "лейбл X" / "label X" / "фирме X" / "компании X" / "издательства X"
+    m = _LABEL_CONTEXT_RE.search(text)
     if m:
-        filters["label"] = m.group(1).strip()
+        filters["label"] = _strip_quotes(m.group(1).strip())
 
     # Artist: "репертуар X" / "исполнитель X" / "группа X" / "артист X"
     # Handles Russian inflection: группа/группе/группы/группой/группу
     if not filters:
         m = re.search(
-            r"(?:репертуар|исполнител[ья]|групп[аеыуойи]?|артист[аеуыой]?|artist|band)\s+(.+?)(?:\s*$)",
+            r"(?:репертуар|исполнител[ья]|групп[аеыуойи]?|артист[аеуыой]?|artist|band)\s+([«»\w\s.,-]+?)(?:\s*$)",
             text, re.IGNORECASE,
         )
         if m:
-            artist = m.group(1).strip()
+            artist = _strip_quotes(m.group(1).strip())
             # Strip trailing noise ("и дай мне Excel", etc.)
             artist = re.sub(r'\s+(?:и|дай|скинь|в|как|excel|файл|xlsx).*$', '', artist, flags=re.IGNORECASE).strip()
             if artist:
                 filters["artist"] = artist
-        else:
-            # Fallback: bare words after stripping known conversational noise
-            # Only use this fallback if text looks like a CLEAN artist query (≤4 words after stripping)
-            stop = {
-                "выгрузи", "выгрузка", "выгрузку", "выгружай", "выгрузить",
-                "экспорт", "экспортируй", "сделай", "дай", "покажи", "скинь",
-                "треки", "трек", "музыку", "музыка", "репертуар", "исполнитель",
-                "группа", "из", "базы", "за", "год", "года", "период", "все", "мне",
-                "пожалуйста", "список", "по", "полный", "полное", "полностью",
-                "файл", "да", "нет", "всё", "отлично", "хорошо", "ладно",
-                "хочу", "нужно", "нужен", "нужны", "можешь", "можно",
-                "дайте", "отчёт", "отчет", "и", "а", "но", "в", "на", "для",
-                "excel", "xlsx", "полный", "полная", "весь", "всю",
-            }
-            words = [w.strip(".,!?") for w in text.split() if w.lower().strip(".,!?") not in stop]
-            # Only trust fallback for short clean queries (pure artist name, not a sentence)
-            if 1 <= len(words) <= 4:
-                filters["artist"] = " ".join(words)
-            # If too many words remain, the text is conversational — don't extract artist
+
+    # Alias lookup: single known label keyword (e.g. "Мелодия", "Зион")
+    if not filters:
+        text_clean = lower.strip(".,!?«» ")
+        for alias_key, alias_val in LABEL_ALIASES.items():
+            if alias_key in text_clean:
+                filters["label"] = alias_val
+                break
+
+    # Fallback: bare words → artist only for very short clean queries
+    if not filters:
+        stop = {
+            "выгрузи", "выгрузка", "выгрузку", "выгружай", "выгрузить",
+            "экспорт", "экспортируй", "сделай", "дай", "покажи", "скинь",
+            "треки", "трек", "треков", "трека", "треке",
+            "музыку", "музыка", "репертуар", "исполнитель",
+            "группа", "из", "базы", "за", "год", "года", "период", "все", "мне",
+            "пожалуйста", "список", "по", "полный", "полное", "полностью",
+            "файл", "да", "нет", "всё", "отлично", "хорошо", "ладно",
+            "хочу", "нужно", "нужен", "нужны", "можешь", "можно",
+            "дайте", "отчёт", "отчет", "и", "а", "но", "в", "на", "для",
+            "excel", "xlsx", "полная", "весь", "всю", "фирме", "фирма",
+            "компании", "компания", "лейбле", "лейбла",
+        }
+        words = [_strip_quotes(w.strip(".,!?")) for w in text.split()
+                 if w.lower().strip(".,!?«» ") not in stop]
+        words = [w for w in words if w]
+        if 1 <= len(words) <= 4:
+            filters["artist"] = " ".join(words)
 
     return filters
 
