@@ -1048,7 +1048,7 @@ def parse_briefing_intent(text: str) -> dict:
         filter_person = "ekaterina"
     elif any(w in lower for w in _alex_words):
         filter_person = "alexandra"
-    elif any(w in lower for w in ("мои", "моих", "у меня", "мне", "только мои", "my", "mine")):
+    elif any(w in lower for w in ("мои", "моих", "у меня", "только мои", "мои задачи", "my", "mine", "дениса", "денис")):
         filter_person = "me"
     else:
         filter_person = None  # all people
@@ -1318,7 +1318,7 @@ def run_coordinator(chat_id: int, message: str) -> dict:
     history.append({"role": "user", "content": message})
 
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-sonnet-4-6",
         max_tokens=600,
         system=_get_coordinator_prompt(),
         messages=history[-12:],
@@ -1801,7 +1801,8 @@ _TASK_CREATION_VERBS = (
     "поставь", "поставить", "создай", "создать", "добавь", "добавить",
     "занеси", "занести", "запиши", "записать", "сделай", "сделать",
     "напомни", "напомнить", "зафиксируй", "зафиксировать",
-    "внеси", "внести", "добавь",
+    "внеси", "внести", "отправь", "отправить", "отправьте",
+    "зашли", "пошли", "скинь",
 )
 
 
@@ -2099,9 +2100,10 @@ async def _dispatch_coordinator(update: Update, text: str) -> None:
         elif action == "asana_task":
             title = result.get("title", text[:80])
             notes = result.get("notes", text)
+            due_on = result.get("due_on", "")
             await thinking_msg.edit_text("📋 Создаю задачу в Asana…")
             asana_result = await loop.run_in_executor(
-                None, save_to_asana, notes, title
+                None, save_to_asana, notes, title, "denis@synclab.pro", due_on
             )
             await thinking_msg.edit_text(f"🎯 Рядовой:\n\n{asana_result}")
         elif action == "search":
