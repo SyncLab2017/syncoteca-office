@@ -296,11 +296,9 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
             year_conds.append(f"release_date.ilike.*{y}*")
 
     if conditions and year_conds:
-        # artist/label/genre + year: OR for artist variants, AND year in query param
-        params["or"] = f"({','.join(conditions)})"
-        # PostgREST top-level params are AND-ed — add year as a separate and= group
-        # Encode as: and=(or(year_conds))  → supported in PostgREST v10+
-        params["and"] = f"(or({','.join(year_conds)}))"
+        # artist/label/genre + year: AND of two OR groups
+        # PostgREST syntax: and=(or(artist_cond1,...),or(year_cond1,...))
+        params["and"] = f"(or({','.join(conditions)}),or({','.join(year_conds)}))"
     elif conditions:
         params["or"] = f"({','.join(conditions)})"
     elif year_conds:
