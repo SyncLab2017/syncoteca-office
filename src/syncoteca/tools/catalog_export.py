@@ -209,6 +209,11 @@ def parse_export_query(text: str) -> dict:
             "данный", "данная", "данное", "данной", "данного",
             # noun case forms
             "группе", "группу", "группой",
+            # pronoun oblique cases often leaked through ("что есть по ней")
+            "ней", "нём", "ним", "ними", "них",
+            "нам", "нами", "вам", "вами", "вас",
+            "им", "ими", "их",
+            "ему", "её", "его",
         }
         words = [_strip_quotes(w.strip(".,!?")) for w in text.split()
                  if w.lower().strip(".,!?«» ") not in stop]
