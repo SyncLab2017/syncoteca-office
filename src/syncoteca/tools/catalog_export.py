@@ -163,8 +163,9 @@ def parse_export_query(text: str) -> dict:
     # Fallback: bare words → artist only for very short clean queries
     if not filters:
         stop = {
-            "выгрузи", "выгрузим", "выгрузите", "выгружаем", "выгружаете",
+            "выгрузи", "выгрузим", "выгрузите", "выгружаем", "выгружаете", "выгружать",
             "выгрузка", "выгрузку", "выгружай", "выгрузить",
+            "тысяч", "тысячи", "тысяча",
             "экспорт", "экспортируй", "сделай", "дай", "покажи", "скинь",
             "треки", "трек", "треков", "трека", "треке",
             "музыку", "музыка", "репертуар", "исполнитель",
@@ -205,7 +206,7 @@ def parse_export_query(text: str) -> dict:
     return filters
 
 
-def fetch_tracks(filters: dict, limit: int = 2000) -> list[dict]:
+def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
     """Query Supabase tracks with the given filters. Returns list of track dicts."""
     params: dict = {
         "select": "id,title,artist,album,label,music_author,lyrics_author,release_date,genre_1,link",

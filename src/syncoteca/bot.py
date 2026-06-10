@@ -1853,7 +1853,8 @@ def _kowalski_detect_intent(text: str) -> str | None:
     """Detect catalog tool intent from natural language. Returns tool name or None."""
     lower = text.lower()
     if any(w in lower for w in (
-        "выгрузи", "выгрузим", "выгрузите", "выгрузка", "выгружай", "выгрузить", "выгрузку",
+        "выгрузи", "выгрузим", "выгрузите", "выгрузка", "выгружай", "выгрузить", "выгрузку", "выгружать",
+        "весь каталог", "полный каталог", "всю базу",
         "экспорт", "экспортируй", "сделай excel", "сформируй excel",
         "excel по", "excel для", "скачать список", "дай список треков",
         "дай файл", "пришли файл", "скинь файл", "сделай файл",
@@ -1883,7 +1884,7 @@ _ARTIST_FILLER = {
     "да", "нет", "всё", "все", "всех", "отлично", "хорошо", "ладно", "пожалуйста",
     "полный", "полное", "полностью", "список", "списке", "по", "и", "а", "но",
     "excel", "xlsx", "файл", "отчёт", "отчет",
-    "выгрузку", "выгрузи", "выгрузим", "выгрузите", "выгружаем", "выгружаете",
+    "выгрузку", "выгрузи", "выгрузим", "выгрузите", "выгружаем", "выгружаете", "выгружать",
     "дай", "скинь", "покажи", "мне", "нам", "тебе", "там",
     "давай", "давайте", "конечно", "окей", "ок", "угу", "ага",
     "хочу", "хочешь", "нужно", "нужен", "нужны", "можешь", "можно",
@@ -2093,7 +2094,14 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
             if _is_affirmation:
                 catalog_ctx = ""
             else:
-                catalog_ctx = await loop.run_in_executor(None, search_supabase_catalog, user_request)
+                # Only search catalog if there's a meaningful entity (artist/label/year/genre).
+                # Without a clear entity, random word matches corrupt LLM context.
+                from syncoteca.tools.catalog_export import parse_export_query as _pq
+                _entity_filters = _pq(user_request)
+                if _export_filters_are_clean(_entity_filters):
+                    catalog_ctx = await loop.run_in_executor(None, search_supabase_catalog, user_request)
+                else:
+                    catalog_ctx = ""
             enriched = f"{catalog_ctx}\n\n{user_request}" if catalog_ctx else user_request
             result = await loop.run_in_executor(
                 None, run_direct_agent, agent_name, chat_id, enriched
