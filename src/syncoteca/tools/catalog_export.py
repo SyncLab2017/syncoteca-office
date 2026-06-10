@@ -303,16 +303,15 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
     r.raise_for_status()
     rows = r.json()
 
-    # Post-filter by year as safety net for artist+year queries (and= not supported on older PostgREST)
-    if year_from is not None and conditions:
+    # Always post-filter by year: fixes ilike false positives
+    # (e.g. release_date="2004-2005" matches *2005* but first year = 2004)
+    if year_from is not None:
         yt_safe = year_to or year_from
-        filtered = []
-        for row in rows:
-            rd = row.get("release_date") or ""
-            m = re.search(r"\b((?:19|20)\d{2})\b", str(rd))
-            if m and year_from <= int(m.group(1)) <= yt_safe:
-                filtered.append(row)
-        return filtered
+        rows = [
+            row for row in rows
+            if (m := re.search(r"\b((?:19|20)\d{2})\b", str(row.get("release_date") or "")))
+            and year_from <= int(m.group(1)) <= yt_safe
+        ]
 
     return rows
 

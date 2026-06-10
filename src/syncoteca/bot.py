@@ -703,14 +703,19 @@ def search_supabase_catalog(query: str) -> str:
         if not rows:
             return ""
 
-        if year_from is not None and conditions:
-            filtered = []
-            for r in rows:
-                y = _year_from_release_date(r.get("release_date") or "")
-                if y is not None and year_from <= y <= (year_to or year_from):
-                    filtered.append(r)
-            if filtered:
-                rows = filtered
+        if year_from is not None:
+            # Always apply Python year post-filter: fixes ilike false positives
+            # e.g. release_date="2004-2005" matches *2005* but first year = 2004.
+            # Also: if text-term search returned unrelated years, discard them.
+            yt_s = year_to or year_from
+            rows = [
+                r for r in rows
+                if (lambda y: y is not None and year_from <= y <= yt_s)(
+                    _year_from_release_date(r.get("release_date") or "")
+                )
+            ]
+            if not rows:
+                return ""
 
         year_note = f", {year_from}–{year_to}" if year_from and year_to and year_from != year_to else (f", {year_from}" if year_from else "")
         display_rows = rows[:20]
