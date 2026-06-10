@@ -113,9 +113,19 @@ def parse_export_query(text: str) -> dict:
     if m:
         filters["label"] = _strip_quotes(m.group(1).strip())
 
+    # Quoted artist name: «Руки Вверх», "Аквариум" — guillemets/quotes signal artist directly
+    if not filters.get("artist"):
+        m = re.search(r'[«"]([\w\s.\-!?]+?)[»"]', text)
+        if m:
+            candidate = m.group(1).strip()
+            # Accept if 1–5 words and not a genre/label/year phrase
+            cand_words = candidate.split()
+            if 1 <= len(cand_words) <= 5:
+                filters["artist"] = candidate
+
     # Artist: "репертуар X" / "исполнитель X" / "группа X" / "артист X"
     # Handles Russian inflection: группа/группе/группы/группой/группу
-    if not filters:
+    if not filters.get("artist"):
         m = re.search(
             r"(?:репертуар|исполнител[ья]|групп[аеыуойи]?|артист[аеуыой]?|artist|band)\s+([«»\w\s.,-]+?)(?:\s*$)",
             text, re.IGNORECASE,
