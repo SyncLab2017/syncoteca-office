@@ -240,11 +240,33 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
 
     if filters.get("artist"):
         a = filters["artist"].replace("*", "").replace("(", "").replace(")", "")
-        conditions.append(f"artist.ilike.*{a}*")
+        if " " in a:
+            # Multi-word name: broad match is safe ("Группа Форум" won't clash)
+            conditions.append(f"artist.ilike.*{a}*")
+        else:
+            # Single-word: word-boundary conditions so "Секрет" ≠ "Секретарь"
+            conditions.extend([
+                f"artist.ilike.{a}",       # exact
+                f"artist.ilike.{a} *",     # "Секрет feat. X"
+                f"artist.ilike.* {a}",     # "Группа Секрет"
+                f"artist.ilike.* {a} *",   # "Foo Секрет Bar"
+                f"artist.ilike.{a},*",     # "Секрет, Земляне"
+                f"artist.ilike.* {a},*",   # "Foo Секрет, Bar"
+                f"artist.ilike.*,{a}",     # "Земляне, Секрет"
+                f"artist.ilike.*,{a} *",   # "Foo, Секрет Bar"
+            ])
         # Genitive/accusative ending normalization: "Киркорова" → try "Киркоров" too
         a_stripped = re.sub(r'[аяуюыиеёо]$', '', a, flags=re.IGNORECASE)
         if a_stripped != a and len(a_stripped) >= 4:
-            conditions.append(f"artist.ilike.*{a_stripped}*")
+            if " " in a_stripped:
+                conditions.append(f"artist.ilike.*{a_stripped}*")
+            else:
+                conditions.extend([
+                    f"artist.ilike.{a_stripped}",
+                    f"artist.ilike.{a_stripped} *",
+                    f"artist.ilike.* {a_stripped}",
+                    f"artist.ilike.* {a_stripped} *",
+                ])
 
     if filters.get("label"):
         lb = filters["label"].replace("*", "")
