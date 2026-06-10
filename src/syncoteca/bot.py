@@ -674,13 +674,27 @@ def search_supabase_catalog(query: str) -> str:
         else:
             or_filter = f"({','.join(conditions)})"
 
+        # COUNT query — get total matching rows without fetching all data
+        count_resp = httpx.get(
+            f"{base}/rest/v1/tracks",
+            headers={"apikey": key, "Authorization": f"Bearer {key}", "Prefer": "count=exact"},
+            params={"or": or_filter, "select": "id", "limit": "1"},
+            timeout=15,
+        )
+        total_count = 0
+        if count_resp.is_success:
+            cr = count_resp.headers.get("Content-Range", "")
+            m_cr = re.search(r'/(\d+)', cr)
+            if m_cr:
+                total_count = int(m_cr.group(1))
+
         resp = httpx.get(
             f"{base}/rest/v1/tracks",
             headers={"apikey": key, "Authorization": f"Bearer {key}"},
             params={
                 "or": or_filter,
                 "select": "title,artist,album,label,lyrics_author,music_author,genre_1,link,release_date",
-                "limit": "500",
+                "limit": "50",
             },
             timeout=15,
         )
@@ -699,10 +713,14 @@ def search_supabase_catalog(query: str) -> str:
                 rows = filtered
 
         year_note = f", {year_from}–{year_to}" if year_from and year_to and year_from != year_to else (f", {year_from}" if year_from else "")
-        count_note = f" (первые {len(rows)})" if len(rows) >= 100 else f" ({len(rows)} треков)"
+        display_rows = rows[:20]
+        if total_count > len(display_rows):
+            count_note = f" (всего в базе: {total_count} треков, показаны первые {len(display_rows)})"
+        else:
+            count_note = f" ({len(display_rows)} треков)"
         lines = [f"[КАТАЛОГ SYNC LAB{count_note}{year_note}:"]
-        detailed = len(rows) <= 20
-        for r in rows:
+        detailed = len(display_rows) <= 20
+        for r in display_rows:
             parts = [f"• «{r.get('title') or ''}»", f"— {r.get('artist') or '?'}"]
             if r.get("label"):
                 parts.append(f"| Лейбл: {r['label']}")
@@ -1892,6 +1910,8 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "обогащение треков", "enrich", "заполни метаданные", "обнови метаданные",
         "yandex music обогащение", "обогати через яндекс", "обогати через yandex",
         "заполни пустые поля", "треки без метаданных",
+        # Short stems — resilient to voice typos ("обоготи", "обогатить" etc.)
+        "обогат", "обогащ", "обогот",
     )):
         return "enrich"
     return None
@@ -1915,6 +1935,10 @@ _ARTIST_FILLER = {
     "есть", "ли", "у", "нас", "что", "где", "когда",
     "какой", "какая", "какое", "какие", "каких",
     "сколько", "много", "мало",
+    "инфу", "информацию", "информации", "информация",
+    "данные", "данных", "данным", "данного",
+    "подбери", "подобрать",
+    "песни", "песня", "песню",
     "знаешь", "знаете", "имеется", "имеются", "числится",
     # personal pronouns
     "ты", "вы", "он", "она", "они", "я", "мы",
@@ -1967,13 +1991,26 @@ def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
         return text
 
     # Fast path: use the last catalog lookup query (set when catalog_ctx was non-empty).
-    # Much more reliable than history scan — avoids stale entities from older messages.
+    # Stored as parsed filters dict to avoid re-parsing noise like "инфу ASTI".
     cached = _LAST_CATALOG_ENTITY.get(chat_id)
     if cached:
-        cached_filters = parse_export_query(cached)
-        if _export_filters_are_clean(cached_filters):
-            logger.info(f"Export subject from _LAST_CATALOG_ENTITY: {cached!r}")
-            return cached
+        if isinstance(cached, dict) and _export_filters_are_clean(cached):
+            # Reconstruct a clean minimal query from the stored filters
+            artist = cached.get("artist")
+            if artist:
+                logger.info(f"Export subject from _LAST_CATALOG_ENTITY dict: {artist!r}")
+                return artist
+            label = cached.get("label")
+            if label:
+                return f"лейбл {label}"
+            year_from = cached.get("year_from")
+            if year_from:
+                return str(year_from)
+        elif isinstance(cached, str):
+            cached_filters = parse_export_query(cached)
+            if _export_filters_are_clean(cached_filters):
+                logger.info(f"Export subject from _LAST_CATALOG_ENTITY str: {cached!r}")
+                return cached
 
     # Short affirmation ("да, выгружай") — scan session history for last mentioned entity
     history = DIRECT_SESSIONS["content_manager"].get(chat_id, [])
@@ -2229,7 +2266,7 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                 if _export_filters_are_clean(_entity_filters):
                     catalog_ctx = await loop.run_in_executor(None, search_supabase_catalog, user_request)
                     if catalog_ctx:
-                        _LAST_CATALOG_ENTITY[chat_id] = user_request
+                        _LAST_CATALOG_ENTITY[chat_id] = dict(_entity_filters)
                 else:
                     catalog_ctx = ""
             enriched = f"{catalog_ctx}\n\n{user_request}" if catalog_ctx else user_request
