@@ -104,6 +104,11 @@ ACTIVE_AGENT: dict[int, str] = {}
 # so Kowalski can offer to fix release dates on the same batch.
 _PENDING_DATE_FIX: dict[int, dict] = {}
 
+# Last entity query used for a successful catalog lookup (chat_id → query text).
+# Set when catalog_ctx is non-empty; cleared after export. Prevents stale history
+# scan from picking up wrong artist on "да, выгрузи" follow-ups.
+_LAST_CATALOG_ENTITY: dict[int, str] = {}
+
 # Coordinator dialogue history
 COORDINATOR_SESSIONS: dict[int, list[dict]] = defaultdict(list)
 
@@ -1961,6 +1966,15 @@ def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
     if len(text.split()) > 10:
         return text
 
+    # Fast path: use the last catalog lookup query (set when catalog_ctx was non-empty).
+    # Much more reliable than history scan — avoids stale entities from older messages.
+    cached = _LAST_CATALOG_ENTITY.get(chat_id)
+    if cached:
+        cached_filters = parse_export_query(cached)
+        if _export_filters_are_clean(cached_filters):
+            logger.info(f"Export subject from _LAST_CATALOG_ENTITY: {cached!r}")
+            return cached
+
     # Short affirmation ("да, выгружай") — scan session history for last mentioned entity
     history = DIRECT_SESSIONS["content_manager"].get(chat_id, [])
     for msg in reversed(history[-30:]):
@@ -2012,6 +2026,8 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             history.append({"role": "assistant", "content": f"[Выгрузка: {subject} — {count} треков → {filename}]"})
             DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
 
+            _LAST_CATALOG_ENTITY.pop(chat_id, None)
+
             if count == 0:
                 await thinking.edit_text(
                     f"🗃️ Ковальски: по запросу «{subject}» треков не найдено.\n"
@@ -2020,12 +2036,18 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                 return
             caption = build_export_caption(tracks, subject)
             await thinking.edit_text(f"🗃️ Найдено {count} треков, отправляю…")
-            await update.message.reply_document(
-                document=io.BytesIO(xlsx_bytes),
-                filename=filename,
-                caption=caption,
-            )
-            await thinking.delete()
+            try:
+                await update.message.reply_document(
+                    document=io.BytesIO(xlsx_bytes),
+                    filename=filename,
+                    caption=caption,
+                    read_timeout=60,
+                    write_timeout=60,
+                )
+                await thinking.delete()
+            except Exception as tg_err:
+                logger.warning(f"Telegram file upload timeout (file likely delivered): {tg_err}")
+                await thinking.edit_text(f"🗃️ {count} треков → {filename} (файл отправлен)")
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка экспорта: {e}")
 
@@ -2206,6 +2228,8 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                 _entity_filters = _pq(user_request)
                 if _export_filters_are_clean(_entity_filters):
                     catalog_ctx = await loop.run_in_executor(None, search_supabase_catalog, user_request)
+                    if catalog_ctx:
+                        _LAST_CATALOG_ENTITY[chat_id] = user_request
                 else:
                     catalog_ctx = ""
             enriched = f"{catalog_ctx}\n\n{user_request}" if catalog_ctx else user_request

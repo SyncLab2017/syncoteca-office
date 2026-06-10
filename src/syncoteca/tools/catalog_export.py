@@ -249,7 +249,7 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
     if conditions:
         params["or"] = f"({','.join(conditions)})"
 
-    r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=15)
+    r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=45)
     r.raise_for_status()
     rows = r.json()
 
