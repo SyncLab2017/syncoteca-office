@@ -2142,11 +2142,11 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             total_pending = await loop.run_in_executor(None, count_empty_tracks)
         except Exception:
             total_pending = "?"
+        eta = f"~{int(total_pending) * 4 // 60} мин" if str(total_pending).isdigit() and int(total_pending) > 0 else "несколько минут"
         reply = (
             f"🗃️ Ковальски: иду работать.\n"
-            f"Вижу ~{total_pending} треков без метаданных.\n"
-            f"Обрабатываю пакет: {limit} треков.\n"
-            f"Вернусь с отчётом — займёт ~{limit * 4 // 60} мин."
+            f"Нашёл {total_pending} треков без метаданных.\n"
+            f"Займёт {eta}."
         )
         await update.message.reply_text(reply)
         history = DIRECT_SESSIONS["content_manager"][chat_id]
@@ -2959,11 +2959,11 @@ async def handle_enrich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception:
         total_pending = "?"
 
+    eta = f"~{int(total_pending) * 4 // 60} мин" if str(total_pending).isdigit() and int(total_pending) > 0 else "несколько минут"
     reply = (
         f"🗃️ Ковальски: иду работать.\n"
-        f"Вижу ~{total_pending} треков без метаданных.\n"
-        f"Обрабатываю пакет: {limit} треков.\n"
-        f"Вернусь с отчётом — займёт ~{limit * 4 // 60} мин."
+        f"Нашёл {total_pending} треков без метаданных.\n"
+        f"Займёт {eta}."
     )
     await update.message.reply_text(reply)
     asyncio.create_task(_run_enrich_task(chat_id, context.bot, limit))
