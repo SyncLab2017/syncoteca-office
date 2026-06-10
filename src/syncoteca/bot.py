@@ -1232,16 +1232,20 @@ def run_direct_agent(agent_name: str, chat_id: int, user_message: str) -> str:
     history.append({"role": "user", "content": user_message})
     model = _DIRECT_AGENT_MODELS.get(agent_name, _DEFAULT_DIRECT_MODEL)
 
+    # Kowalski keeps a longer context window (30 turns)
+    ctx_window = 60 if agent_name == "content_manager" else 16
+
     response = client.messages.create(
         model=model,
         max_tokens=2048,
         system=system,
-        messages=history[-16:],
+        messages=history[-ctx_window:],
     )
 
     reply = response.content[0].text.strip()
     history.append({"role": "assistant", "content": reply})
-    DIRECT_SESSIONS[agent_name][chat_id] = history[-20:]
+    keep = 60 if agent_name == "content_manager" else 20
+    DIRECT_SESSIONS[agent_name][chat_id] = history[-keep:]
     return reply
 
 
@@ -1679,8 +1683,111 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
         await thinking_msg.edit_text(f"Ошибка: {e}")
 
 
+def _kowalski_detect_intent(text: str) -> str | None:
+    """Detect catalog tool intent from natural language. Returns tool name or None."""
+    lower = text.lower()
+    if any(w in lower for w in (
+        "выгрузи", "выгрузка", "экспорт", "экспортируй", "сделай excel",
+        "excel по", "excel для", "скачать список", "дай список треков",
+    )):
+        return "export"
+    if any(w in lower for w in (
+        "проверь даты", "обнови даты", "discogs", "дата дискогс",
+        "треки без даты", "проверить даты", "fix_dates", "fix dates",
+    )):
+        return "fix_dates"
+    if any(w in lower for w in (
+        "аномали", "неполные метаданн", "проверь каталог", "аудит каталог",
+        "треки без автора", "треки без исполнитель", "check_catalog",
+        "нет автора", "нет исполнитель", "нет лейбла", "пустые поля",
+    )):
+        return "check_catalog"
+    if any(w in lower for w in (
+        "export_anomalies", "выгрузи аномали", "excel аномали", "список аномали",
+    )):
+        return "export_anomalies"
+    return None
+
+
+async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
+    """Execute a Kowalski catalog tool triggered by natural language."""
+    import io
+    loop = asyncio.get_event_loop()
+    chat_id = update.effective_chat.id
+
+    if intent == "export":
+        thinking = await update.message.reply_text("🗃️ Ковальски: формирую Excel…")
+        try:
+            from syncoteca.tools.catalog_export import export_catalog
+            xlsx_bytes, filename, count = await loop.run_in_executor(None, export_catalog, text)
+            if count == 0:
+                await thinking.edit_text(f"🗃️ Ковальски: по запросу треков не найдено.")
+                return
+            await thinking.edit_text(f"🗃️ Найдено {count} треков, отправляю…")
+            await update.message.reply_document(
+                document=io.BytesIO(xlsx_bytes),
+                filename=filename,
+                caption=f"🗃️ SYNC LAB — {count} треков",
+            )
+            await thinking.delete()
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка экспорта: {e}")
+
+    elif intent == "fix_dates":
+        import re as _re
+        m = _re.search(r'\b(\d{1,3})\b', text)
+        limit = min(int(m.group(1)), 500) if m else 50
+        only_null = "all" not in text.lower() and "все" not in text.lower()
+        asyncio.create_task(_run_fix_dates_task(chat_id, update.get_bot(), limit, only_null))
+        await update.message.reply_text(
+            f"🗃️ Ковальски: запускаю проверку дат Discogs\n"
+            f"Лимит: {limit} | {'только без даты' if only_null else 'все треки'}\n"
+            f"Займёт ~{limit}с — буду присылать прогресс."
+        )
+
+    elif intent == "check_catalog":
+        thinking = await update.message.reply_text("🔍 Ковальски: сканирую каталог на аномалии…")
+        try:
+            from syncoteca.tools.catalog_audit import run_audit
+            _, report = await loop.run_in_executor(None, run_audit)
+            await thinking.edit_text(report)
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка аудита: {e}")
+
+    elif intent == "export_anomalies":
+        thinking = await update.message.reply_text("🔍 Ковальски: формирую Excel с аномалиями…")
+        try:
+            from syncoteca.tools.catalog_audit import fetch_anomalies, export_anomalies_excel
+            tracks = await loop.run_in_executor(None, fetch_anomalies)
+            if not tracks:
+                await thinking.edit_text("✅ Ковальски: аномалий нет.")
+                return
+            xlsx_bytes = await loop.run_in_executor(None, export_anomalies_excel, tracks)
+            await thinking.edit_text(f"🔍 Найдено {len(tracks)} аномалий, отправляю…")
+            await update.message.reply_document(
+                document=io.BytesIO(xlsx_bytes),
+                filename="SYNCLAB_anomalies.xlsx",
+                caption=f"🔍 SYNC LAB — {len(tracks)} треков с неполными метаданными",
+            )
+            await thinking.delete()
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка: {e}")
+
+
+async def _run_fix_dates_task(chat_id: int, bot, limit: int, only_null: bool) -> None:
+    from syncoteca.tools.date_fixer import run_date_fix
+    await run_date_fix(chat_id, bot, limit=limit, only_null=only_null)
+
+
 async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
     from . import events as ev
+
+    # Kowalski: intercept catalog tool intents before LLM call
+    if agent_name == "content_manager":
+        intent = _kowalski_detect_intent(user_request)
+        if intent:
+            await _run_kowalski_tool(update, intent, user_request)
+            return
 
     label = AGENT_LABELS.get(agent_name, agent_name)
     mem_name = MEMORY_NAME_MAP.get(agent_name, agent_name)
@@ -2326,6 +2433,7 @@ async def post_init(app: Application) -> None:
         BotCommand("start", "Главное меню"),
         BotCommand("stop", "Вернуться к координатору"),
         BotCommand("license", "→ Рико (лицензии, права)"),
+        BotCommand("kowalski", "→ Ковальски (контент, каталог, метаданные, даты)"),
         BotCommand("lawyer", "→ Ксюша (договоры, юрист)"),
         BotCommand("accountant", "→ Марина (роялти, бухгалтерия)"),
         BotCommand("bizdev", "→ Директор по развитию"),
@@ -2335,11 +2443,6 @@ async def post_init(app: Application) -> None:
         BotCommand("teach_stop", "Завершить режим обучения"),
         BotCommand("memory", "Показать знания: /memory рико"),
         BotCommand("briefing", "Брифинг задач Asana на сегодня"),
-        BotCommand("kowalski", "→ Ковальски (контент, каталог, метаданные)"),
-        BotCommand("fix_dates", "Ковальски: проверить даты Discogs /fix_dates [50] [all]"),
-        BotCommand("export", "Ковальски: выгрузка в Excel /export S.T.A.L.K.E.R."),
-        BotCommand("check_catalog", "Ковальски: аудит аномалий каталога"),
-        BotCommand("export_anomalies", "Ковальски: Excel с неполными метаданными"),
     ]
     await app.bot.set_my_commands(commands)
 
