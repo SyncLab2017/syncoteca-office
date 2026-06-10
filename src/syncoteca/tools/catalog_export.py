@@ -96,17 +96,24 @@ def parse_export_query(text: str) -> dict:
         return filters
 
     # Year range: "1975-1980" / "1975–1980"
+    # Do NOT return early — continue to extract artist/label from the same query
+    # so "Барыкин 1990-2000" gets both artist AND year_from/year_to.
     m = re.search(r"\b((?:19|20)\d{2})\s*[-–—]\s*((?:19|20)\d{2})\b", text)
     if m:
         filters["year_from"] = int(m.group(1))
         filters["year_to"] = int(m.group(2))
-        return filters  # year range overrides everything
+        # Strip year range from text so it doesn't pollute artist detection below
+        text = (text[:m.start()] + text[m.end():]).strip()
+        lower = text.lower()
 
-    # Single year
-    m = re.search(r"\b((?:19|20)\d{2})\b", text)
-    if m:
-        filters["year_from"] = int(m.group(1))
-        filters["year_to"] = int(m.group(1))
+    # Single year (only if no range already found)
+    if not filters.get("year_from"):
+        m = re.search(r"\b((?:19|20)\d{2})\b", text)
+        if m:
+            filters["year_from"] = int(m.group(1))
+            filters["year_to"] = int(m.group(1))
+            text = (text[:m.start()] + text[m.end():]).strip()
+            lower = text.lower()
 
     # Label: "лейбл X" / "label X" / "фирме X" / "компании X" / "издательства X"
     m = _LABEL_CONTEXT_RE.search(text)
@@ -145,7 +152,7 @@ def parse_export_query(text: str) -> dict:
             # Strip trailing noise: pronouns, perception verbs, prepositions, Excel requests
             artist = re.sub(
                 r'\s+(?:ты|вы|он|она|они|я|мы|видишь|видите|вижу|видит|видно'
-                r'|и|дай|скинь|в|на|из|как|excel|файл|xlsx'
+                r'|и|дай|скинь|в|на|из|как|за|с|по|до|от|excel|файл|xlsx'
                 r'|сколько|столько|у|есть|нет|имеется|имеются|числится'
                 r'|там|здесь|тут|песен|треков|песни|трека|треке'
                 r').*$',
@@ -173,8 +180,8 @@ def parse_export_query(text: str) -> dict:
                 filters["label"] = alias_val
                 break
 
-    # Fallback: bare words → artist only for very short clean queries
-    if not filters:
+    # Fallback: bare words → artist only when no entity filter found yet
+    if not filters.get("artist") and not filters.get("label") and not filters.get("genre"):
         stop = {
             "выгрузи", "выгрузим", "выгрузите", "выгружаем", "выгружаете", "выгружать",
             "выгрузка", "выгрузку", "выгружай", "выгрузить",
@@ -182,7 +189,7 @@ def parse_export_query(text: str) -> dict:
             "экспорт", "экспортируй", "сделай", "дай", "покажи", "скинь",
             "треки", "трек", "треков", "трека", "треке",
             "музыку", "музыка", "репертуар", "исполнитель",
-            "группа", "из", "базы", "за", "год", "года", "период", "все", "мне",
+            "группа", "из", "базы", "за", "год", "года", "период", "перид", "перио", "все", "мне",
             "пожалуйста", "список", "по", "полный", "полное", "полностью",
             "файл", "да", "нет", "всё", "отлично", "хорошо", "ладно",
             "хочу", "нужно", "нужен", "нужны", "можешь", "можно",
@@ -220,7 +227,8 @@ def parse_export_query(text: str) -> dict:
             "ему", "её", "его",
         }
         words = [_strip_quotes(w.strip(".,!?")) for w in text.split()
-                 if w.lower().strip(".,!?«» ") not in stop]
+                 if w.lower().strip(".,!?«» ") not in stop
+                 and not re.match(r'^(?:19|20)\d{2}(?:[-–—]\d{4})?$', w.strip(".,!?"))]
         words = [w for w in words if w]
         if 1 <= len(words) <= 4:
             filters["artist"] = " ".join(words)
