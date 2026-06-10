@@ -1214,6 +1214,12 @@ DIRECT_PROMPTS: dict[str, str] = {
 # Agents that use direct call (not CrewAI) in bot context
 DIRECT_AGENTS = set(DIRECT_PROMPTS.keys())
 
+# Accountant needs Sonnet for reliable financial arithmetic
+_DIRECT_AGENT_MODELS: dict[str, str] = {
+    "accountant": "claude-sonnet-4-6",
+}
+_DEFAULT_DIRECT_MODEL = "claude-haiku-4-5-20251001"
+
 
 def run_direct_agent(agent_name: str, chat_id: int, user_message: str) -> str:
     """Direct Anthropic API call without CrewAI overhead."""
@@ -1223,9 +1229,10 @@ def run_direct_agent(agent_name: str, chat_id: int, user_message: str) -> str:
     system = DIRECT_PROMPTS.get(agent_name) or "Ты — помощник агентства Синкотека."
     history = DIRECT_SESSIONS[agent_name][chat_id]
     history.append({"role": "user", "content": user_message})
+    model = _DIRECT_AGENT_MODELS.get(agent_name, _DEFAULT_DIRECT_MODEL)
 
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=model,
         max_tokens=2048,
         system=system,
         messages=history[-16:],
