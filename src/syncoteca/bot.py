@@ -1899,9 +1899,13 @@ _ARTIST_FILLER = {
     "знаешь", "знаете", "имеется", "имеются", "числится",
     # personal pronouns
     "ты", "вы", "он", "она", "они", "я", "мы",
-    # vision/perception verbs that trail artist names in questions
+    # vision/perception verbs
     "видишь", "видите", "вижу", "видит", "видно",
-    # reester/catalog context
+    "посмотрю", "посмотри", "посмотрим", "посмотрите", "посмотреть",
+    "взгляну", "взгляни", "гляну", "загляну",
+    "пришли", "пришлю",
+    "сделай", "сделаю", "сделал", "сделает",
+    # catalog context
     "реестре", "реестра", "реестру", "нашем", "нашей",
 }
 
@@ -1929,7 +1933,7 @@ def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
 
     # Long messages with no entity = new unrelated request (e.g. "из чарта выгрузку")
     # Don't pull stale entity from history — let it fail gracefully.
-    if len(text.split()) > 6:
+    if len(text.split()) > 10:
         return text
 
     # Short affirmation ("да, выгружай") — scan session history for last mentioned entity
@@ -1970,10 +1974,10 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
     if intent == "export":
         thinking = await update.message.reply_text("🗃️ Ковальски: формирую Excel…")
         try:
-            from syncoteca.tools.catalog_export import export_catalog, parse_export_query
+            from syncoteca.tools.catalog_export import export_catalog, parse_export_query, build_export_caption
             export_query = _kowalski_resolve_export_query(text, chat_id)
             logger.info(f"Kowalski export query resolved: {export_query!r}")
-            xlsx_bytes, filename, count = await loop.run_in_executor(None, export_catalog, export_query)
+            xlsx_bytes, filename, count, tracks = await loop.run_in_executor(None, export_catalog, export_query)
 
             # Record tool invocation in session history so context isn't lost
             filters = parse_export_query(export_query)
@@ -1989,11 +1993,12 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                     "Уточни: название исполнителя, год или лейбл."
                 )
                 return
+            caption = build_export_caption(tracks, subject)
             await thinking.edit_text(f"🗃️ Найдено {count} треков, отправляю…")
             await update.message.reply_document(
                 document=io.BytesIO(xlsx_bytes),
                 filename=filename,
-                caption=f"🗃️ SYNC LAB — {count} треков | {subject}",
+                caption=caption,
             )
             await thinking.delete()
         except Exception as e:
@@ -2673,19 +2678,20 @@ async def handle_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     loop = asyncio.get_event_loop()
 
     try:
-        from syncoteca.tools.catalog_export import export_catalog
-        xlsx_bytes, filename, count = await loop.run_in_executor(None, export_catalog, query)
+        from syncoteca.tools.catalog_export import export_catalog, build_export_caption
+        xlsx_bytes, filename, count, tracks = await loop.run_in_executor(None, export_catalog, query)
 
         if count == 0:
             await thinking.edit_text(f"🗃️ Ковальски: по запросу «{query}» треков не найдено.")
             return
 
+        caption = build_export_caption(tracks, query)
         await thinking.edit_text(f"🗃️ Ковальски: найдено {count} треков, отправляю файл…")
         import io
         await update.message.reply_document(
             document=io.BytesIO(xlsx_bytes),
             filename=filename,
-            caption=f"🗃️ SYNC LAB — {count} треков\nФильтр: {query}",
+            caption=caption,
         )
         await thinking.delete()
     except Exception as e:

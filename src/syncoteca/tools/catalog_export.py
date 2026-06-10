@@ -139,6 +139,9 @@ def parse_export_query(text: str) -> dict:
             "наш", "наша", "наше", "наши", "нашем", "нашей",
             "ты", "вы", "он", "она", "они", "я", "мы",
             "видишь", "видите", "вижу", "видит", "видно",
+            "посмотрю", "посмотри", "посмотрим", "посмотрите", "посмотреть",
+            "взгляну", "взгляни", "гляну", "загляну",
+            "пришли", "пришлю", "сделай", "сделаю", "сделал",
         }
         words = [_strip_quotes(w.strip(".,!?")) for w in text.split()
                  if w.lower().strip(".,!?«» ") not in stop]
@@ -264,10 +267,44 @@ def build_excel(tracks: list[dict], title: str = "Каталог SYNC LAB") -> b
     return buf.getvalue()
 
 
-def export_catalog(query_text: str) -> tuple[bytes, str, int]:
+def build_export_caption(tracks: list[dict], subject: str) -> str:
+    """Build a short caveman-style summary for the Excel file caption."""
+    count = len(tracks)
+    if not count:
+        return f"{subject} — треков не найдено."
+
+    albums = {}
+    labels = set()
+    years = set()
+    for t in tracks:
+        alb = t.get("album") or ""
+        if alb:
+            albums[alb] = albums.get(alb, 0) + 1
+        lbl = t.get("label") or ""
+        if lbl:
+            labels.add(lbl)
+        yr = re.search(r"\b((?:19|20)\d{2})\b", str(t.get("release_date") or ""))
+        if yr:
+            years.add(int(yr.group(1)))
+
+    lines = [f"{subject} — {count} треков."]
+    if albums:
+        top = sorted(albums.items(), key=lambda x: -x[1])[:5]
+        album_str = ", ".join(f"«{a}» ({n})" for a, n in top)
+        if len(albums) > 5:
+            album_str += f" + ещё {len(albums) - 5}"
+        lines.append(f"Альбомы: {album_str}.")
+    if labels:
+        lines.append(f"Лейблы: {', '.join(sorted(labels)[:3])}.")
+    if years:
+        lines.append(f"Годы: {min(years)}–{max(years)}.")
+    return "\n".join(lines)
+
+
+def export_catalog(query_text: str) -> tuple[bytes, str, int, list[dict]]:
     """Parse query, fetch tracks, build Excel.
 
-    Returns (xlsx_bytes, filename, track_count).
+    Returns (xlsx_bytes, filename, track_count, tracks).
     """
     filters = parse_export_query(query_text)
     tracks = fetch_tracks(filters)
@@ -288,4 +325,4 @@ def export_catalog(query_text: str) -> tuple[bytes, str, int]:
 
     title_str = " | ".join(str(v) for v in filters.values() if v) or "Полный каталог"
     xlsx_bytes = build_excel(tracks, title=f"SYNC LAB — {title_str}")
-    return xlsx_bytes, filename, len(tracks)
+    return xlsx_bytes, filename, len(tracks), tracks
