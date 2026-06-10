@@ -670,9 +670,9 @@ def search_supabase_catalog(query: str) -> str:
             params={
                 "or": or_filter,
                 "select": "title,artist,album,label,lyrics_author,music_author,genre_1,link,release_date",
-                "limit": "100",
+                "limit": "500",
             },
-            timeout=10,
+            timeout=15,
         )
         resp.raise_for_status()
         rows = resp.json()
@@ -1837,6 +1837,9 @@ _ARTIST_FILLER = {
     "полный", "полное", "полностью", "список", "по", "и", "а", "но",
     "excel", "xlsx", "файл", "отчёт", "отчет", "выгрузку", "выгрузи",
     "дай", "скинь", "покажи", "мне", "нам", "тебе", "там",
+    "давай", "давайте", "конечно", "окей", "ок", "угу", "ага",
+    "хочу", "хочешь", "нужно", "нужен", "нужны", "можешь", "можно",
+    "посмотри", "покажи", "проверь", "скажи", "напомни",
 }
 
 
@@ -1861,19 +1864,31 @@ def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
     if _export_filters_are_clean(filters):
         return text  # text already has clean signal
 
-    # Conversational text — scan session history for last explicitly mentioned entity
+    # Conversational text — scan session history (both user and assistant) for last mentioned entity
     history = DIRECT_SESSIONS["content_manager"].get(chat_id, [])
-    for msg in reversed(history[-20:]):
-        if msg.get("role") != "user":
-            continue
+    for msg in reversed(history[-30:]):
         content = msg.get("content", "")
-        # Strip injected catalog blocks — they're not user intent
-        clean = re.sub(r'\[КАТАЛОГ SYNC LAB.*?\]', '', content, flags=re.DOTALL).strip()
+        role = msg.get("role", "")
+        # Strip injected catalog blocks and assistant formatting
+        clean = re.sub(r'\[КАТАЛОГ SYNC LAB.*?\]', '', content, flags=re.DOTALL)
+        clean = re.sub(r'\[Выгрузка:.*?\]', '', clean, flags=re.DOTALL).strip()
         if not clean:
             continue
+        # For assistant messages: extract entity mentions like "треков Любэ", "репертуар X"
+        if role == "assistant":
+            # Look for "N треков X" / "репертуар X" / "треки X" patterns in assistant text
+            m = re.search(r'треков?\s+([\w\s.,-]+?)(?:\s*[|\n(]|\s*$)', clean, re.IGNORECASE)
+            if m:
+                candidate_text = m.group(1).strip()
+                cand = parse_export_query(candidate_text)
+                if _export_filters_are_clean(cand):
+                    logger.info(f"Export subject from assistant msg: '{candidate_text}'")
+                    return candidate_text
+            continue
+        # User messages: strip and parse
         candidate = parse_export_query(clean)
         if _export_filters_are_clean(candidate):
-            logger.info(f"Export subject resolved from history: {candidate}")
+            logger.info(f"Export subject from user history: {candidate}")
             return clean
     return text  # last resort
 
