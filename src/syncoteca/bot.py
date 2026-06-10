@@ -2196,6 +2196,116 @@ async def handle_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await thinking.edit_text(text)
 
 
+async def handle_fix_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/fix_dates [limit] [all] — Kowalski verifies release dates via Discogs."""
+    if not _is_owner(update):
+        return await _deny(update)
+
+    from syncoteca.tools.date_fixer import run_date_fix
+
+    args = context.args or []
+    limit = 50
+    only_null = True
+    for a in args:
+        if a.isdigit():
+            limit = min(int(a), 500)
+        elif a.lower() == "all":
+            only_null = False
+
+    chat_id = update.effective_chat.id
+    asyncio.create_task(run_date_fix(chat_id, context.bot, limit=limit, only_null=only_null))
+
+
+async def handle_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/export <query> — Kowalski exports catalog to Excel."""
+    if not _is_owner(update):
+        return await _deny(update)
+
+    query = " ".join(context.args) if context.args else ""
+    if not query:
+        await update.message.reply_text(
+            "🗃️ Ковальски: укажи фильтр.\n"
+            "Примеры:\n"
+            "  /export S.T.A.L.K.E.R.\n"
+            "  /export 1996\n"
+            "  /export 1975-1980\n"
+            "  /export лейбл Мелодия\n"
+            "  /export Земфира"
+        )
+        return
+
+    thinking = await update.message.reply_text("🗃️ Ковальски: формирую Excel…")
+    loop = asyncio.get_event_loop()
+
+    try:
+        from syncoteca.tools.catalog_export import export_catalog
+        xlsx_bytes, filename, count = await loop.run_in_executor(None, export_catalog, query)
+
+        if count == 0:
+            await thinking.edit_text(f"🗃️ Ковальски: по запросу «{query}» треков не найдено.")
+            return
+
+        await thinking.edit_text(f"🗃️ Ковальски: найдено {count} треков, отправляю файл…")
+        import io
+        await update.message.reply_document(
+            document=io.BytesIO(xlsx_bytes),
+            filename=filename,
+            caption=f"🗃️ SYNC LAB — {count} треков\nФильтр: {query}",
+        )
+        await thinking.delete()
+    except Exception as e:
+        logger.exception("Export error")
+        await thinking.edit_text(f"❌ Ошибка экспорта: {e}")
+
+
+async def handle_check_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/check_catalog — Kowalski scans for tracks with link but missing metadata."""
+    if not _is_owner(update):
+        return await _deny(update)
+
+    thinking = await update.message.reply_text("🔍 Ковальски: сканирую каталог на аномалии…")
+    loop = asyncio.get_event_loop()
+
+    try:
+        from syncoteca.tools.catalog_audit import run_audit
+        tracks, report = await loop.run_in_executor(None, run_audit)
+        await thinking.edit_text(report)
+    except Exception as e:
+        logger.exception("Catalog audit error")
+        await thinking.edit_text(f"❌ Ошибка аудита: {e}")
+
+
+async def handle_export_anomalies(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/export_anomalies — Kowalski exports tracks with incomplete metadata to Excel."""
+    if not _is_owner(update):
+        return await _deny(update)
+
+    thinking = await update.message.reply_text("🔍 Ковальски: формирую Excel с аномалиями…")
+    loop = asyncio.get_event_loop()
+
+    try:
+        from syncoteca.tools.catalog_audit import fetch_anomalies, export_anomalies_excel
+        import io
+
+        tracks = await loop.run_in_executor(None, fetch_anomalies)
+
+        if not tracks:
+            await thinking.edit_text("✅ Ковальски: аномалий нет — все треки со ссылками заполнены.")
+            return
+
+        xlsx_bytes = await loop.run_in_executor(None, export_anomalies_excel, tracks)
+        await thinking.edit_text(f"🔍 Найдено {len(tracks)} аномалий, отправляю файл…")
+        await update.message.reply_document(
+            document=io.BytesIO(xlsx_bytes),
+            filename="SYNCLAB_anomalies.xlsx",
+            caption=f"🔍 SYNC LAB — {len(tracks)} треков с неполными метаданными",
+        )
+        await thinking.delete()
+    except Exception as e:
+        logger.exception("Export anomalies error")
+        await thinking.edit_text(f"❌ Ошибка: {e}")
+
+
 async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/stop — clear sticky agent, teach mode, return to coordinator."""
     if not _is_owner(update):
@@ -2224,6 +2334,10 @@ async def post_init(app: Application) -> None:
         BotCommand("teach_stop", "Завершить режим обучения"),
         BotCommand("memory", "Показать знания: /memory рико"),
         BotCommand("briefing", "Брифинг задач Asana на сегодня"),
+        BotCommand("fix_dates", "Ковальски: проверить даты Discogs /fix_dates [50] [all]"),
+        BotCommand("export", "Ковальски: выгрузка в Excel /export S.T.A.L.K.E.R."),
+        BotCommand("check_catalog", "Ковальски: аудит аномалий каталога"),
+        BotCommand("export_anomalies", "Ковальски: Excel с неполными метаданными"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -2248,6 +2362,10 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("remember", handle_memory_add))
     app.add_handler(CommandHandler("stop", handle_stop))
     app.add_handler(CommandHandler("briefing", handle_briefing))
+    app.add_handler(CommandHandler("fix_dates", handle_fix_dates))
+    app.add_handler(CommandHandler("export", handle_export))
+    app.add_handler(CommandHandler("check_catalog", handle_check_catalog))
+    app.add_handler(CommandHandler("export_anomalies", handle_export_anomalies))
     app.add_handler(CommandHandler("asana_debug", handle_asana_debug))
 
     for cmd in SLASH_MAP:
