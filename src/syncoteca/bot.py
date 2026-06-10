@@ -1802,6 +1802,29 @@ async def _dispatch_license(update: Update, user_request: str) -> None:
         await thinking_msg.edit_text(f"Ошибка: {e}")
 
 
+def _rika_catalog_redirect(text: str) -> bool:
+    """Return True when Rico should hand off to Kowalski: catalog/repertoire list requests."""
+    # Export/tool intents always go to Kowalski
+    if _kowalski_detect_intent(text):
+        return True
+    lower = text.lower()
+    # Catalog filter signals: looking for a SET of tracks, not a single rights lookup
+    catalog_signals = (
+        "все треки", "все песни", "все записи",
+        "репертуар",
+        "список треков", "список песен",
+        "треки группы", "песни группы",
+        "треки артиста", "песни артиста",
+        "треки исполнителя", "песни исполнителя",
+        "найди треки", "найди песни", "покажи треки", "покажи песни",
+        "треки жанра", "песни жанра", "по жанру",
+        "треки лейбла", "все треки лейбла",
+        "по автору", "автора слов", "автора музыки", "автор слов", "автор музыки",
+        "сколько треков у", "сколько песен у",
+    )
+    return any(sig in lower for sig in catalog_signals)
+
+
 def _kowalski_detect_intent(text: str) -> str | None:
     """Detect catalog tool intent from natural language. Returns tool name or None."""
     lower = text.lower()
@@ -2075,7 +2098,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if chat_id in ACTIVE_AGENT:
         agent_name = ACTIVE_AGENT[chat_id]
         if agent_name == "license_manager":
-            await _dispatch_license(update, text)
+            if _rika_catalog_redirect(text):
+                ACTIVE_AGENT[chat_id] = "content_manager"
+                _persist_active_agent(chat_id, "content_manager")
+                await update.message.reply_text("🔄 Передаю Ковальски — он разберётся с каталогом.")
+                await _dispatch(update, "content_manager", text)
+            else:
+                await _dispatch_license(update, text)
         else:
             await _dispatch(update, agent_name, text)
         return
@@ -2148,7 +2177,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if chat_id in ACTIVE_AGENT:
         agent_name = ACTIVE_AGENT[chat_id]
         if agent_name == "license_manager":
-            await _dispatch_license(update, text)
+            if _rika_catalog_redirect(text):
+                ACTIVE_AGENT[chat_id] = "content_manager"
+                _persist_active_agent(chat_id, "content_manager")
+                await update.message.reply_text("🔄 Передаю Ковальски — он разберётся с каталогом.")
+                await _dispatch(update, "content_manager", text)
+            else:
+                await _dispatch_license(update, text)
         else:
             await _dispatch(update, agent_name, text)
         return
