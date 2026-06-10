@@ -1342,6 +1342,25 @@ _DIRECT_AGENT_MODELS: dict[str, str] = {
 _DEFAULT_DIRECT_MODEL = "claude-haiku-4-5-20251001"
 
 
+_CATALOG_BLOCK_RE = re.compile(r'\[КАТАЛОГ SYNC LAB[^\n]*\n.*?\n\]', re.DOTALL)
+
+
+def _strip_old_catalog_blocks(messages: list[dict]) -> list[dict]:
+    """For content_manager: strip [КАТАЛОГ SYNC LAB...] from all but the last user message.
+
+    Prevents multiple injected slices from confusing the LLM with different track counts.
+    """
+    result = []
+    last_user_idx = max((i for i, m in enumerate(messages) if m["role"] == "user"), default=-1)
+    for i, msg in enumerate(messages):
+        if msg["role"] == "user" and i < last_user_idx:
+            clean = _CATALOG_BLOCK_RE.sub("", msg["content"]).strip()
+            result.append({"role": "user", "content": clean or msg["content"]})
+        else:
+            result.append(msg)
+    return result
+
+
 def run_direct_agent(agent_name: str, chat_id: int, user_message: str) -> str:
     """Direct Anthropic API call without CrewAI overhead."""
     import anthropic
@@ -1355,11 +1374,15 @@ def run_direct_agent(agent_name: str, chat_id: int, user_message: str) -> str:
     # Kowalski keeps a longer context window (30 turns)
     ctx_window = 60 if agent_name == "content_manager" else 16
 
+    hist_slice = history[-ctx_window:]
+    if agent_name == "content_manager":
+        hist_slice = _strip_old_catalog_blocks(hist_slice)
+
     response = client.messages.create(
         model=model,
         max_tokens=2048,
         system=system,
-        messages=history[-ctx_window:],
+        messages=hist_slice,
     )
 
     reply = response.content[0].text.strip()
@@ -1904,7 +1927,12 @@ def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
     if _export_filters_are_clean(filters):
         return text  # text already has clean signal
 
-    # Conversational text — scan session history (both user and assistant) for last mentioned entity
+    # Long messages with no entity = new unrelated request (e.g. "из чарта выгрузку")
+    # Don't pull stale entity from history — let it fail gracefully.
+    if len(text.split()) > 6:
+        return text
+
+    # Short affirmation ("да, выгружай") — scan session history for last mentioned entity
     history = DIRECT_SESSIONS["content_manager"].get(chat_id, [])
     for msg in reversed(history[-30:]):
         content = msg.get("content", "")

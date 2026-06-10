@@ -96,7 +96,7 @@ def parse_export_query(text: str) -> dict:
             text, re.IGNORECASE,
         )
         if m:
-            artist = _strip_quotes(m.group(1).strip())
+            artist = _strip_quotes(m.group(1).strip()).strip(".,!?;:")
             # Strip trailing noise: pronouns, perception verbs, prepositions, Excel requests
             artist = re.sub(
                 r'\s+(?:ты|вы|он|она|они|я|мы|видишь|видите|вижу|видит|видно'
