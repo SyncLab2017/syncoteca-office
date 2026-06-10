@@ -135,7 +135,7 @@ class SyncotecaCrew:
         cfg["backstory"] = cfg.get("backstory", "") + _load_knowledge("marina")
         return Agent(
             config=cfg,
-            llm=make_llm(),
+            llm=make_sonnet(),
             tools=[self._synclab, self._royalty, self._doc, self._db],
             memory=True,
             verbose=True,
