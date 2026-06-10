@@ -253,15 +253,17 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
             conditions.append(f"artist.ilike.*{a}*")
         else:
             # Single-word: word-boundary conditions so "Секрет" ≠ "Секретарь"
+            # Values with spaces/commas MUST be double-quoted in PostgREST or()
+            # syntax — unquoted commas are parsed as condition separators → 400.
             conditions.extend([
-                f"artist.ilike.{a}",       # exact
-                f"artist.ilike.{a} *",     # "Секрет feat. X"
-                f"artist.ilike.* {a}",     # "Группа Секрет"
-                f"artist.ilike.* {a} *",   # "Foo Секрет Bar"
-                f"artist.ilike.{a},*",     # "Секрет, Земляне"
-                f"artist.ilike.* {a},*",   # "Foo Секрет, Bar"
-                f"artist.ilike.*,{a}",     # "Земляне, Секрет"
-                f"artist.ilike.*,{a} *",   # "Foo, Секрет Bar"
+                f'artist.ilike."{a}"',       # exact
+                f'artist.ilike."{a} *"',     # "Секрет feat. X"
+                f'artist.ilike."* {a}"',     # "Группа Секрет"
+                f'artist.ilike."* {a} *"',   # "Foo Секрет Bar"
+                f'artist.ilike."{a},*"',     # "Секрет, Земляне"
+                f'artist.ilike."* {a},*"',   # "Foo Секрет, Bar"
+                f'artist.ilike."*,{a}"',     # "Земляне, Секрет"
+                f'artist.ilike."*,{a} *"',   # "Foo, Секрет Bar"
             ])
         # Genitive/accusative ending normalization: "Киркорова" → try "Киркоров" too
         a_stripped = re.sub(r'[аяуюыиеёо]$', '', a, flags=re.IGNORECASE)
@@ -270,10 +272,10 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
                 conditions.append(f"artist.ilike.*{a_stripped}*")
             else:
                 conditions.extend([
-                    f"artist.ilike.{a_stripped}",
-                    f"artist.ilike.{a_stripped} *",
-                    f"artist.ilike.* {a_stripped}",
-                    f"artist.ilike.* {a_stripped} *",
+                    f'artist.ilike."{a_stripped}"',
+                    f'artist.ilike."{a_stripped} *"',
+                    f'artist.ilike."* {a_stripped}"',
+                    f'artist.ilike."* {a_stripped} *"',
                 ])
 
     if filters.get("label"):
@@ -296,13 +298,14 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
             year_conds.append(f"release_date.ilike.*{y}*")
 
     if conditions and year_conds:
-        # artist/label/genre + year: AND of two OR groups
-        # PostgREST syntax: and=(or(artist_cond1,...),or(year_cond1,...))
-        params["and"] = f"(or({','.join(conditions)}),or({','.join(year_conds)}))"
+        # Artist filter in DB via or=; year applied in Python post-filter below.
+        # Avoids and=(or(),or()) nested syntax which Supabase PostgREST rejects.
+        params["or"] = f"({','.join(conditions)})"
     elif conditions:
         params["or"] = f"({','.join(conditions)})"
     elif year_conds:
-        # Year-only query: Supabase filters by year, no Python post-filter needed
+        # Year-only: push year conditions to DB so Cyrillic artists aren't
+        # lost to Latin-first ORDER BY cutting off rows before limit.
         params["or"] = f"({','.join(year_conds)})"
 
     r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=45)
