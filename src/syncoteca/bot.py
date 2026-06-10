@@ -598,6 +598,124 @@ def search_supabase_tracks(query: str) -> str:
         return ""
 
 
+def search_supabase_catalog(query: str) -> str:
+    """Kowalski-specific catalog search: tracks + authors + labels + genre/tag fields.
+
+    Extends base track search to include music_author, lyrics_author, genre_1 columns
+    so Kowalski can answer "find tracks by composer X" or "tracks tagged jazz".
+    """
+    import httpx
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not base or not key:
+        return ""
+    try:
+        quoted_terms = _extract_quoted_strings(query)
+        terms = quoted_terms
+        if not terms:
+            words = [w.strip(_QUOTE_CHARS).lower() for w in query.split()]
+            terms = [w for w in words if len(w) > 1 and w not in _TRACK_SEARCH_NOISE]
+        if not terms:
+            terms = _extract_search_terms(query) or [query.strip()]
+
+        def _clean(s: str) -> str:
+            out = s.replace("(", "").replace(")", "").replace("'", "").replace("*", "")
+            out = out.replace(",", "").replace(".", " ").replace("\x00", "")
+            return out.strip()
+
+        clean_terms = [_clean(t) for t in terms[:8] if len(_clean(t)) >= 2]
+        if not clean_terms:
+            return ""
+
+        year_from, year_to = _extract_year_range(query) if not quoted_terms else (None, None)
+        non_year_terms = [t for t in clean_terms if not re.match(r'^\d{4}$', t)]
+        text_terms = non_year_terms if year_from is not None else clean_terms
+
+        conditions = []
+        if text_terms:
+            if len(text_terms) > 1:
+                phrase = " ".join(text_terms)
+                for col in ("artist", "title", "music_author", "lyrics_author"):
+                    conditions.append(f"{col}.ilike.*{phrase}*")
+                tphrase = _translit_ru(phrase)
+                if tphrase != phrase:
+                    conditions.append(f"artist.ilike.*{tphrase}*")
+
+            all_cols = ("title", "artist", "album", "label", "music_author", "lyrics_author", "genre_1")
+            for t in text_terms:
+                for col in all_cols:
+                    conditions.append(f"{col}.ilike.*{t}*")
+                if _is_cyrillic(t):
+                    for stem in _stem_ru(t):
+                        tlit = _translit_ru(stem)
+                        if len(tlit) >= 4 and tlit != stem:
+                            conditions.append(f"artist.ilike.*{tlit}*")
+                            conditions.append(f"music_author.ilike.*{tlit}*")
+
+        if not conditions and year_from is None:
+            return ""
+
+        if year_from is not None and not conditions:
+            if year_from == year_to or year_to is None:
+                or_filter = f"(release_date.ilike.*{year_from}*)"
+            else:
+                year_conds = [f"release_date.ilike.*{y}*" for y in range(year_from, min(year_to + 1, year_from + 21))]
+                or_filter = f"({','.join(year_conds)})"
+        else:
+            or_filter = f"({','.join(conditions)})"
+
+        resp = httpx.get(
+            f"{base}/rest/v1/tracks",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            params={
+                "or": or_filter,
+                "select": "title,artist,album,label,lyrics_author,music_author,genre_1,link,release_date",
+                "limit": "100",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if not rows:
+            return ""
+
+        if year_from is not None and conditions:
+            filtered = []
+            for r in rows:
+                y = _year_from_release_date(r.get("release_date") or "")
+                if y is not None and year_from <= y <= (year_to or year_from):
+                    filtered.append(r)
+            if filtered:
+                rows = filtered
+
+        year_note = f", {year_from}–{year_to}" if year_from and year_to and year_from != year_to else (f", {year_from}" if year_from else "")
+        count_note = f" (первые {len(rows)})" if len(rows) >= 100 else f" ({len(rows)} треков)"
+        lines = [f"[КАТАЛОГ SYNC LAB{count_note}{year_note}:"]
+        detailed = len(rows) <= 20
+        for r in rows:
+            parts = [f"• «{r.get('title') or ''}»", f"— {r.get('artist') or '?'}"]
+            if r.get("label"):
+                parts.append(f"| Лейбл: {r['label']}")
+            yr = _year_from_release_date(r.get("release_date") or "")
+            if yr:
+                parts.append(f"| {yr}")
+            if r.get("genre_1"):
+                parts.append(f"| Жанр: {r['genre_1']}")
+            if detailed:
+                if r.get("music_author"):
+                    parts.append(f"| Авт. музыки: {r['music_author']}")
+                if r.get("lyrics_author"):
+                    parts.append(f"| Авт. слов: {r['lyrics_author']}")
+                if r.get("link"):
+                    parts.append(f"| {r['link']}")
+            lines.append(" ".join(parts))
+        lines.append("]")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"Catalog search error: {e}")
+        return ""
+
+
 def search_supabase_contacts(query: str) -> str:
     """Search Supabase contacts by individual terms (ilike per word). Returns formatted context or ''."""
     import httpx
@@ -1799,7 +1917,14 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
         loop = asyncio.get_event_loop()
         chat_id = update.effective_chat.id
 
-        if agent_name in DIRECT_AGENTS:
+        if agent_name == "content_manager":
+            # Pre-fetch catalog context from Supabase, inject into message
+            catalog_ctx = await loop.run_in_executor(None, search_supabase_catalog, user_request)
+            enriched = f"{catalog_ctx}\n\n{user_request}" if catalog_ctx else user_request
+            result = await loop.run_in_executor(
+                None, run_direct_agent, agent_name, chat_id, enriched
+            )
+        elif agent_name in DIRECT_AGENTS:
             result = await loop.run_in_executor(
                 None, run_direct_agent, agent_name, chat_id, user_request
             )
