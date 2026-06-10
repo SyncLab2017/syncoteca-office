@@ -42,7 +42,7 @@ _LABEL_CONTEXT_RE = re.compile(
 
 
 def _strip_quotes(s: str) -> str:
-    return s.strip("«»\"'").strip()
+    return re.sub(r'[«»"\']', '', s).strip()
 
 
 def parse_export_query(text: str) -> dict:
@@ -97,8 +97,12 @@ def parse_export_query(text: str) -> dict:
         )
         if m:
             artist = _strip_quotes(m.group(1).strip())
-            # Strip trailing noise ("и дай мне Excel", etc.)
-            artist = re.sub(r'\s+(?:и|дай|скинь|в|как|excel|файл|xlsx).*$', '', artist, flags=re.IGNORECASE).strip()
+            # Strip trailing noise: pronouns, perception verbs, prepositions, Excel requests
+            artist = re.sub(
+                r'\s+(?:ты|вы|он|она|они|я|мы|видишь|видите|вижу|видит|видно'
+                r'|и|дай|скинь|в|на|из|как|excel|файл|xlsx).*$',
+                '', artist, flags=re.IGNORECASE
+            ).strip()
             if artist:
                 filters["artist"] = artist
 
@@ -132,7 +136,9 @@ def parse_export_query(text: str) -> dict:
             "каталоге", "каталогу", "каталог", "каталога",
             "реестре", "реестра", "реестру",
             "знаешь", "знаете", "имеется", "имеются",
-            "наш", "наша", "наше", "наши",
+            "наш", "наша", "наше", "наши", "нашем", "нашей",
+            "ты", "вы", "он", "она", "они", "я", "мы",
+            "видишь", "видите", "вижу", "видит", "видно",
         }
         words = [_strip_quotes(w.strip(".,!?")) for w in text.split()
                  if w.lower().strip(".,!?«» ") not in stop]
