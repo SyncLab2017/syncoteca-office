@@ -254,22 +254,41 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
         g = filters["genre"].replace("*", "")
         conditions.append(f"genre_1.ilike.*{g}*")
 
-    if conditions:
+    # Year conditions — push into Supabase query directly so Latin-first
+    # ORDER BY artist doesn't hide Cyrillic artists behind the row limit.
+    # Without this, year-only queries post-filter on 5000 Latin-sorted rows
+    # and never reach Cyrillic artists (А-Я, Unicode > Z).
+    year_from = filters.get("year_from")
+    year_to = filters.get("year_to", year_from)
+    year_conds: list[str] = []
+    if year_from is not None:
+        for y in range(year_from, min(year_to + 1, year_from + 51)):
+            year_conds.append(f"release_date.ilike.*{y}*")
+
+    if conditions and year_conds:
+        # artist/label/genre + year: OR for artist variants, AND year in query param
         params["or"] = f"({','.join(conditions)})"
+        # PostgREST top-level params are AND-ed — add year as a separate and= group
+        # Encode as: and=(or(year_conds))  → supported in PostgREST v10+
+        params["and"] = f"(or({','.join(year_conds)}))"
+    elif conditions:
+        params["or"] = f"({','.join(conditions)})"
+    elif year_conds:
+        # Year-only query: Supabase filters by year, no Python post-filter needed
+        params["or"] = f"({','.join(year_conds)})"
 
     r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=45)
     r.raise_for_status()
     rows = r.json()
 
-    # Post-filter by year if specified
-    if filters.get("year_from") is not None:
-        yf = filters["year_from"]
-        yt = filters.get("year_to", yf)
+    # Post-filter by year as safety net for artist+year queries (and= not supported on older PostgREST)
+    if year_from is not None and conditions:
+        yt_safe = year_to or year_from
         filtered = []
         for row in rows:
             rd = row.get("release_date") or ""
             m = re.search(r"\b((?:19|20)\d{2})\b", str(rd))
-            if m and yf <= int(m.group(1)) <= yt:
+            if m and year_from <= int(m.group(1)) <= yt_safe:
                 filtered.append(row)
         return filtered
 
