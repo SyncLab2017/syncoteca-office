@@ -100,6 +100,10 @@ TEACH_SESSIONS: dict[int, str] = {}
 # Sticky agent: /lawyer etc sets this; None = coordinator mode
 ACTIVE_AGENT: dict[int, str] = {}
 
+# After enrich completes, store {chat_id: {"after_id": int, "limit": int}}
+# so Kowalski can offer to fix release dates on the same batch.
+_PENDING_DATE_FIX: dict[int, dict] = {}
+
 # Coordinator dialogue history
 COORDINATOR_SESSIONS: dict[int, list[dict]] = defaultdict(list)
 
@@ -2114,6 +2118,7 @@ async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
     skipped = result.get("skipped", 0)
     errors = result.get("errors", 0)
     total = result.get("total", 0)
+    min_id = result.get("min_id", 0)
 
     lines = ["🗃️ Ковальски: обогащение завершено.", f"Обработано: {total} треков."]
     if ok:
@@ -2126,6 +2131,14 @@ async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
         lines.append("\nПоследние обработанные:")
         lines.extend(progress_msgs[-5:])
 
+    if ok > 0:
+        date_limit = ok + 20
+        lines.append(
+            f"\n❓ Проверить даты релизов по этим трекам через Discogs?\n"
+            f"(~{date_limit} последних треков в базе — скажи «да»)"
+        )
+        _PENDING_DATE_FIX[chat_id] = {"after_id": max(0, min_id - 1), "limit": date_limit}
+
     report = "\n".join(lines)
     await bot.send_message(chat_id, report)
 
@@ -2135,6 +2148,27 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
 
     # Kowalski: intercept catalog tool intents before LLM call
     if agent_name == "content_manager":
+        # Check for pending date-fix followup ("да" after enrich completion)
+        chat_id_early = update.effective_chat.id
+        if chat_id_early in _PENDING_DATE_FIX:
+            lower_req = user_request.lower().strip(".,!? ")
+            _yes_words = {"да", "конечно", "да проверь", "проверь", "проверяй", "давай", "ок", "окей", "угу", "ага"}
+            if lower_req in _yes_words or lower_req.startswith("да"):
+                params = _PENDING_DATE_FIX.pop(chat_id_early)
+                from syncoteca.tools.date_fixer import run_date_fix
+                asyncio.create_task(
+                    run_date_fix(
+                        chat_id_early,
+                        update.get_bot(),
+                        limit=params["limit"],
+                        only_null=True,
+                        after_id=params["after_id"],
+                    )
+                )
+                return
+            else:
+                _PENDING_DATE_FIX.pop(chat_id_early, None)
+
         intent = _kowalski_detect_intent(user_request)
         if intent:
             await _run_kowalski_tool(update, intent, user_request)
@@ -2838,6 +2872,37 @@ async def handle_export_anomalies(update: Update, context: ContextTypes.DEFAULT_
         await thinking.edit_text(f"❌ Ошибка: {e}")
 
 
+async def handle_enrich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/enrich [limit] — Kowalski enriches empty tracks via Yandex Music."""
+    if not _is_owner(update):
+        return await _deny(update)
+
+    import re as _re
+    args_str = " ".join(context.args) if context.args else ""
+    m = _re.search(r'\b(\d{1,4})\b', args_str)
+    limit = min(int(m.group(1)), 1000) if m else 250
+
+    chat_id = update.effective_chat.id
+    ACTIVE_AGENT[chat_id] = "content_manager"
+    _persist_active_agent(chat_id, "content_manager")
+
+    loop = asyncio.get_event_loop()
+    try:
+        from syncoteca.tools.yandex_enricher import count_empty_tracks
+        total_pending = await loop.run_in_executor(None, count_empty_tracks)
+    except Exception:
+        total_pending = "?"
+
+    reply = (
+        f"🗃️ Ковальски: иду работать.\n"
+        f"Вижу ~{total_pending} треков без метаданных.\n"
+        f"Обрабатываю пакет: {limit} треков.\n"
+        f"Вернусь с отчётом — займёт ~{limit * 4 // 60} мин."
+    )
+    await update.message.reply_text(reply)
+    asyncio.create_task(_run_enrich_task(chat_id, context.bot, limit))
+
+
 async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/stop — clear sticky agent, teach mode, return to coordinator."""
     if not _is_owner(update):
@@ -2858,6 +2923,7 @@ async def post_init(app: Application) -> None:
         BotCommand("stop", "Вернуться к координатору"),
         BotCommand("license", "→ Рико (лицензии, права)"),
         BotCommand("kowalski", "→ Ковальски (контент, каталог, метаданные, даты)"),
+        BotCommand("enrich", "Ковальски / Обогащение треков"),
         BotCommand("lawyer", "→ Ксюша (договоры, юрист)"),
         BotCommand("accountant", "→ Марина (роялти, бухгалтерия)"),
         BotCommand("bizdev", "→ Директор по развитию"),
@@ -2892,6 +2958,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("stop", handle_stop))
     app.add_handler(CommandHandler("briefing", handle_briefing))
     app.add_handler(CommandHandler("fix_dates", handle_fix_dates))
+    app.add_handler(CommandHandler("enrich", handle_enrich))
     app.add_handler(CommandHandler("export", handle_export))
     app.add_handler(CommandHandler("check_catalog", handle_check_catalog))
     app.add_handler(CommandHandler("export_anomalies", handle_export_anomalies))

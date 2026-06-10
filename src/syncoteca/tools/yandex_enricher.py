@@ -170,7 +170,9 @@ def enrich_batch(
     tracks = get_empty_tracks(limit=limit, source=source)
     total = len(tracks)
     if not tracks:
-        return {"total": 0, "ok": 0, "skipped": 0, "errors": 0}
+        return {"total": 0, "ok": 0, "skipped": 0, "errors": 0, "min_id": 0}
+
+    min_id = tracks[0].get("id", 0) if tracks else 0
 
     ok = skipped = errors = 0
 
@@ -217,4 +219,4 @@ def enrich_batch(
 
         time.sleep(DELAY_S)
 
-    return {"total": total, "ok": ok, "skipped": skipped, "errors": errors}
+    return {"total": total, "ok": ok, "skipped": skipped, "errors": errors, "min_id": min_id}

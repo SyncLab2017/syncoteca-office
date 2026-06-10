@@ -167,6 +167,7 @@ async def run_date_fix(
     bot,
     limit: int = 50,
     only_null: bool = True,
+    after_id: int = 0,
 ) -> None:
     """Background asyncio task: fix Discogs dates and report to Telegram."""
     global _running
@@ -183,15 +184,17 @@ async def run_date_fix(
     loop = asyncio.get_event_loop()
 
     try:
+        scope = "только без даты" if only_null else "все треки"
+        scope_note = f" (id > {after_id})" if after_id else ""
         await bot.send_message(
             chat_id,
             f"🗃️ Ковальски запускает проверку дат Discogs\n"
-            f"Режим: {'только без даты' if only_null else 'все треки'} | Лимит: {limit}\n"
+            f"Режим: {scope}{scope_note} | Лимит: {limit}\n"
             f"Скорость: ~1 трек/сек → {limit // 60 + 1} мин",
         )
 
         # Fetch batch (sync, runs in executor)
-        tracks = await loop.run_in_executor(None, get_tracks_batch, limit, only_null, 0)
+        tracks = await loop.run_in_executor(None, get_tracks_batch, limit, only_null, after_id)
 
         if not tracks:
             await bot.send_message(chat_id, "✅ Ковальски: треков без даты не найдено — база актуальна.")
