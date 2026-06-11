@@ -1627,6 +1627,13 @@ WELCOME = """
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_owner(update):
+        return await _deny(update)
+    chat_id = update.effective_chat.id
+    ACTIVE_AGENT.pop(chat_id, None)
+    _clear_active_agent(chat_id)
+    TEACH_SESSIONS.pop(chat_id, None)
+    LICENSE_SESSIONS[chat_id] = []
     await update.message.reply_text(WELCOME, parse_mode="Markdown")
 
 
@@ -3348,22 +3355,20 @@ async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def post_init(app: Application) -> None:
     commands = [
-        BotCommand("start", "Главное меню"),
-        BotCommand("stop", "Вернуться к координатору"),
-        BotCommand("license", "→ Рико (лицензии, права)"),
-        BotCommand("kowalski", "→ Ковальски (контент, каталог, метаданные, даты)"),
-        BotCommand("enrich", "Ковальски / Обогащение треков (Яндекс Музыка)"),
-        BotCommand("parse_label", "Ковальски / Парсинг каталога лейбла"),
-        BotCommand("stop_label_parse", "Ковальски / Остановить парсинг лейбла"),
-        BotCommand("verify_dates", "Ковальски / Перепроверить даты через Discogs"),
-        BotCommand("lawyer", "→ Ксюша (договоры, юрист)"),
-        BotCommand("accountant", "→ Марина (роялти, бухгалтерия)"),
-        BotCommand("bizdev", "→ Директор по развитию"),
-        BotCommand("dev", "→ Разработчик"),
-        BotCommand("know", "Записать знание: /know марина НДС 22%"),
-        BotCommand("teach", "Режим обучения: /teach рико"),
-        BotCommand("teach_stop", "Завершить режим обучения"),
-        BotCommand("memory", "Показать знания: /memory рико"),
+        BotCommand("start", "Координатор — начать сначала"),
+        BotCommand("license", "Рико (лицензии, права)"),
+        BotCommand("kowalski", "Ковальски (контент, каталог, метаданные)"),
+        BotCommand("enrich", "Ковальски: обогащение треков (Яндекс Музыка)"),
+        BotCommand("parse_label", "Ковальски: парсинг каталога лейбла"),
+        BotCommand("stop_label_parse", "Ковальски: остановить парсинг лейбла"),
+        BotCommand("verify_dates", "Ковальски: перепроверить даты (Discogs)"),
+        BotCommand("lawyer", "Ксюша (договоры, юрист)"),
+        BotCommand("accountant", "Марина (роялти, бухгалтерия)"),
+        BotCommand("bizdev", "Директор по развитию"),
+        BotCommand("dev", "Разработчик"),
+        BotCommand("know", "Знания: запомнить — /know рико текст"),
+        BotCommand("memory", "Знания: показать — /memory рико"),
+        BotCommand("teach_stop", "Знания: остановить режим обучения"),
         BotCommand("briefing", "Брифинг задач Asana на сегодня"),
     ]
     await app.bot.set_my_commands(commands)
