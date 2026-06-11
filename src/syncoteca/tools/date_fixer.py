@@ -9,7 +9,7 @@ import json
 import os
 import re
 import time
-from typing import Callable
+from typing import Callable, Optional
 
 import httpx
 
@@ -35,14 +35,22 @@ def _sb_base() -> str:
     return os.getenv("SUPABASE_URL", "").rstrip("/")
 
 
-def get_tracks_batch(limit: int = 50, only_null: bool = True, after_id: int = 0) -> list[dict]:
+def get_tracks_batch(
+    limit: int = 50,
+    only_null: bool = True,
+    after_id: int = 0,
+    label: Optional[str] = None,
+    date_from: Optional[str] = None,
+) -> list[dict]:
     """Return up to `limit` tracks to process from Supabase.
 
     only_null=True  → WHERE release_date IS NULL  (unprocessed tracks)
     only_null=False → all tracks, id > after_id  (full re-verification)
+    label           → filter by label name (ilike)
+    date_from       → filter by created_at >= YYYY-MM-DD
     """
     params: dict = {
-        "select": "id,title,artist,release_date",
+        "select": "id,title,artist,release_date,label",
         "order": "id.asc",
         "limit": str(limit),
     }
@@ -50,6 +58,10 @@ def get_tracks_batch(limit: int = 50, only_null: bool = True, after_id: int = 0)
         params["release_date"] = "is.null"
     if after_id:
         params["id"] = f"gt.{after_id}"
+    if label:
+        params["label"] = f"ilike.*{label}*"
+    if date_from:
+        params["created_at"] = f"gte.{date_from}T00:00:00"
 
     r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=10)
     r.raise_for_status()
@@ -168,6 +180,8 @@ async def run_date_fix(
     limit: int = 50,
     only_null: bool = True,
     after_id: int = 0,
+    label: Optional[str] = None,
+    date_from: Optional[str] = None,
 ) -> None:
     """Background asyncio task: fix Discogs dates and report to Telegram."""
     global _running
@@ -186,6 +200,10 @@ async def run_date_fix(
     try:
         scope = "только без даты" if only_null else "все треки"
         scope_note = f" (id > {after_id})" if after_id else ""
+        if label:
+            scope_note += f" | лейбл: {label}"
+        if date_from:
+            scope_note += f" | с {date_from}"
         await bot.send_message(
             chat_id,
             f"🗃️ Ковальски запускает проверку дат Discogs\n"
@@ -194,7 +212,10 @@ async def run_date_fix(
         )
 
         # Fetch batch (sync, runs in executor)
-        tracks = await loop.run_in_executor(None, get_tracks_batch, limit, only_null, after_id)
+        tracks = await loop.run_in_executor(
+            None,
+            lambda: get_tracks_batch(limit, only_null, after_id, label=label, date_from=date_from),
+        )
 
         if not tracks:
             await bot.send_message(chat_id, "✅ Ковальски: треков без даты не найдено — база актуальна.")

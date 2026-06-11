@@ -32,7 +32,11 @@ def _sb_base() -> str:
     return os.getenv("SUPABASE_URL", "").rstrip("/")
 
 
-def get_empty_tracks(limit: int = DEFAULT_BATCH, source: Optional[str] = None) -> list[dict]:
+def get_empty_tracks(
+    limit: int = DEFAULT_BATCH,
+    source: Optional[str] = None,
+    date_from: Optional[str] = None,  # ISO date "YYYY-MM-DD" — filter by created_at
+) -> list[dict]:
     """Tracks with album_processed=false and link set."""
     params = {
         "album_processed": "is.false",
@@ -43,6 +47,8 @@ def get_empty_tracks(limit: int = DEFAULT_BATCH, source: Optional[str] = None) -
     }
     if source:
         params["source_type"] = f"eq.{source}"
+    if date_from:
+        params["created_at"] = f"gte.{date_from}T00:00:00"
     r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=15)
     r.raise_for_status()
     return r.json()
@@ -161,13 +167,14 @@ def enrich_batch(
     limit: int = DEFAULT_BATCH,
     source: Optional[str] = None,
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
+    date_from: Optional[str] = None,
 ) -> dict:
     """Enrich a batch of empty tracks.
 
     progress_cb(done, total, last_title) called every 10 tracks.
     Returns {"total": N, "ok": N, "skipped": N, "errors": N}.
     """
-    tracks = get_empty_tracks(limit=limit, source=source)
+    tracks = get_empty_tracks(limit=limit, source=source, date_from=date_from)
     total = len(tracks)
     if not tracks:
         return {"total": 0, "ok": 0, "skipped": 0, "errors": 0, "min_id": 0}

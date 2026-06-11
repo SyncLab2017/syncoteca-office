@@ -2360,14 +2360,44 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
 
     elif intent == "fix_dates":
         import re as _re
-        m = _re.search(r'\b(\d{1,3})\b', text)
-        limit = min(int(m.group(1)), 500) if m else 50
-        only_null = "all" not in text.lower() and "все" not in text.lower()
-        asyncio.create_task(_run_fix_dates_task(chat_id, update.get_bot(), limit, only_null))
+        from datetime import date as _date, timedelta as _td
+        _tl = text.lower()
+
+        # Label filter: "по лейблу X" / "лейбла X" / "лейбл X"
+        _label_fix: Optional[str] = None
+        _lm = re.search(
+            r"(?:по\s+лейблу?|лейбл(?:а|е|у|ом|ях|ам)?\s+|лейбл\s+)[«\"]?([\w\s\-\.]+?)[»\"]?"
+            r"(?=\s*(?:[.,!?]|$|\b(?:и|с|по|за|от|до|треки|даты)\b))",
+            text, re.IGNORECASE,
+        )
+        if _lm:
+            _label_fix = _lm.group(1).strip()
+
+        # Date filter: "за сегодня" / "за вчера" / "за YYYY-MM-DD"
+        _date_fix: Optional[str] = None
+        if "сегодня" in _tl or "today" in _tl:
+            _date_fix = _date.today().isoformat()
+        elif "вчера" in _tl or "yesterday" in _tl:
+            _date_fix = (_date.today() - _td(days=1)).isoformat()
+        else:
+            _dm = _re.search(r'\b(20\d{2}-\d{2}-\d{2})\b', text)
+            if _dm:
+                _date_fix = _dm.group(1)
+
+        m = _re.search(r'\b(\d{1,4})\b', text)
+        limit = min(int(m.group(1)), 2000) if m else (1000 if (_label_fix or _date_fix) else 50)
+        only_null = "all" not in _tl and "все" not in _tl and not _label_fix and not _date_fix
+
+        from syncoteca.tools.date_fixer import run_date_fix
+        asyncio.create_task(run_date_fix(
+            chat_id, update.get_bot(), limit=limit, only_null=only_null,
+            label=_label_fix, date_from=_date_fix,
+        ))
+        _scope_desc = f"лейбл «{_label_fix}»" if _label_fix else ("сегодняшние треки" if _date_fix else ("только без даты" if only_null else "все треки"))
         reply = (
             f"🗃️ Ковальски: запускаю проверку дат Discogs\n"
-            f"Лимит: {limit} | {'только без даты' if only_null else 'все треки'}\n"
-            f"Займёт ~{limit}с — буду присылать прогресс."
+            f"Область: {_scope_desc} | Лимит: {limit}\n"
+            f"Займёт ~{limit // 60 + 1} мин."
         )
         await update.message.reply_text(reply)
         history = DIRECT_SESSIONS["content_manager"][chat_id]
@@ -2591,23 +2621,29 @@ async def _run_fix_dates_task(chat_id: int, bot, limit: int, only_null: bool) ->
     await run_date_fix(chat_id, bot, limit=limit, only_null=only_null)
 
 
-async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
+async def _run_enrich_task(
+    chat_id: int,
+    bot,
+    limit: int,
+    date_from: Optional[str] = None,
+    auto_discogs: bool = False,
+) -> None:
     from syncoteca.tools.yandex_enricher import enrich_batch
     import asyncio as _asyncio
     import time as _time
 
     loop = _asyncio.get_event_loop()
 
-    # Live progress message — edited per track so Denis sees activity
-    progress_msg = await bot.send_message(chat_id, "⏳ Начинаю обогащение…")
-    _last_edit = [0.0]  # mutable for closure
+    date_label = f" за {date_from}" if date_from else ""
+    progress_msg = await bot.send_message(chat_id, f"⏳ Начинаю обогащение{date_label}…")
+    _last_edit = [0.0]
 
     def _progress(done: int, total: int, info: str) -> None:
         now = _time.monotonic()
-        if now - _last_edit[0] < 3.5:  # respect Telegram edit rate limit
+        if now - _last_edit[0] < 3.5:
             return
         _last_edit[0] = now
-        text = f"⏳ Обогащение: {done}/{total}\n✅ {info}"
+        text = f"⏳ Обогащение{date_label}: {done}/{total}\n✅ {info}"
         fut = _asyncio.run_coroutine_threadsafe(progress_msg.edit_text(text), loop)
         try:
             fut.result(timeout=5)
@@ -2615,7 +2651,10 @@ async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
             pass
 
     try:
-        result = await loop.run_in_executor(None, lambda: enrich_batch(limit=limit, progress_cb=_progress))
+        result = await loop.run_in_executor(
+            None,
+            lambda: enrich_batch(limit=limit, progress_cb=_progress, date_from=date_from),
+        )
     except Exception as e:
         await bot.send_message(chat_id, f"❌ Ковальски: ошибка обогащения — {e}")
         return
@@ -2631,7 +2670,7 @@ async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
     except Exception:
         pass
 
-    lines = ["🗃️ Ковальски: обогащение завершено.", f"Обработано: {total} треков."]
+    lines = [f"🗃️ Ковальски: обогащение{date_label} завершено.", f"Обработано: {total} треков."]
     if ok:
         lines.append(f"✅ Успешно: {ok}")
     if skipped:
@@ -2639,18 +2678,26 @@ async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
     if errors:
         lines.append(f"❌ Ошибок: {errors}")
 
-    if ok > 0:
+    if ok > 0 and not auto_discogs:
         date_limit = ok + 20
         lines.append(
             f"\n❓ Проверить даты релизов по этим трекам через Discogs?\n"
             f"Яндекс Музыка выставил даты — Discogs сверит и найдёт более ранние если есть.\n"
             f"(~{date_limit} треков, id > {max(0, min_id - 1)} — скажи «да»)"
         )
-        # only_null=False — verify Yandex-sourced dates too, not just missing ones
         _PENDING_DATE_FIX[chat_id] = {"after_id": max(0, min_id - 1), "limit": date_limit, "only_null": False}
 
     report = "\n".join(lines)
     await bot.send_message(chat_id, report)
+
+    if ok > 0 and auto_discogs:
+        date_limit = min(ok + 50, 1000)
+        await bot.send_message(
+            chat_id,
+            f"🔍 Ковальски: автоматически запускаю проверку дат Discogs для {date_limit} треков…"
+        )
+        from syncoteca.tools.date_fixer import run_date_fix
+        await run_date_fix(chat_id, bot, limit=date_limit, only_null=False, after_id=max(0, min_id - 1))
 
 
 async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
@@ -3529,14 +3576,33 @@ async def handle_export_anomalies(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def handle_enrich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/enrich [limit] — Kowalski enriches empty tracks via Yandex Music."""
+    """/enrich [limit|today|yesterday|YYYY-MM-DD] — Kowalski enriches empty tracks via Yandex Music."""
     if not _is_owner(update):
         return await _deny(update)
 
+    from datetime import date as _date, timedelta as _timedelta
     import re as _re
+
     args_str = " ".join(context.args) if context.args else ""
-    m = _re.search(r'\b(\d{1,4})\b', args_str)
-    limit = min(int(m.group(1)), 1000) if m else 250
+    args_lower = args_str.lower()
+
+    # Date filter detection
+    date_from: Optional[str] = None
+    auto_discogs = False
+    if "today" in args_lower or "сегодня" in args_lower:
+        date_from = _date.today().isoformat()
+        auto_discogs = True
+    elif "yesterday" in args_lower or "вчера" in args_lower:
+        date_from = (_date.today() - _timedelta(days=1)).isoformat()
+        auto_discogs = True
+    else:
+        m_date = _re.search(r'\b(20\d{2}-\d{2}-\d{2})\b', args_str)
+        if m_date:
+            date_from = m_date.group(1)
+            auto_discogs = True
+
+    m_limit = _re.search(r'\b(\d{1,4})\b', args_str)
+    limit = min(int(m_limit.group(1)), 2000) if m_limit and not date_from else (2000 if date_from else 250)
 
     chat_id = update.effective_chat.id
     ACTIVE_AGENT[chat_id] = "content_manager"
@@ -3554,13 +3620,15 @@ async def handle_enrich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await thinking.edit_text("🗃️ Ковальски: а у нас всё в базе хорошо — пустых треков нет.")
         return
 
+    date_note = f" за {date_from}" if date_from else ""
+    discogs_note = " + проверка Discogs автоматом" if auto_discogs else ""
     eta = f"~{int(total_pending) * 4 // 60} мин" if str(total_pending).isdigit() and int(total_pending) > 0 else "несколько минут"
     reply = (
-        f"🗃️ Ковальски: нашёл {total_pending} треков без метаданных.\n"
-        f"Займёт {eta}. Иду работать."
+        f"🗃️ Ковальски: нашёл {total_pending} треков без метаданных{date_note}.\n"
+        f"Займёт {eta}{discogs_note}. Иду работать."
     )
     await thinking.edit_text(reply)
-    asyncio.create_task(_run_enrich_task(chat_id, context.bot, limit))
+    asyncio.create_task(_run_enrich_task(chat_id, context.bot, limit, date_from=date_from, auto_discogs=auto_discogs))
 
 
 async def handle_parse_label(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
