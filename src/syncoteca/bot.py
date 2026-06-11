@@ -104,6 +104,9 @@ ACTIVE_AGENT: dict[int, str] = {}
 # so Kowalski can offer to fix release dates on the same batch.
 _PENDING_DATE_FIX: dict[int, dict] = {}
 
+# Pending label scrape confirmation {chat_id: {"label_id": str, "label_name": str, "analysis": dict}}
+_PENDING_LABEL_SCRAPE: dict[int, dict] = {}
+
 # Last entity query used for a successful catalog lookup (chat_id → query text).
 # Set when catalog_ctx is non-empty; cleared after export. Prevents stale history
 # scan from picking up wrong artist on "да, выгрузи" follow-ups.
@@ -1918,6 +1921,12 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "спарсить лейбл", "спарсить каталог", "запусти парсинг",
     )):
         return "scrape_label"
+    if any(w in lower for w in (
+        "стоп парсинг", "остановить парсинг", "останови парсинг", "отмена парсинга",
+        "прерви парсинг", "отменить парсинг", "стоп скрапинг", "stop parsing",
+        "стоп скрапер", "остановить скрапинг",
+    )):
+        return "stop_scrape"
     # Status queries about enrichment must NOT trigger a new enrich run
     if re.search(r'\b(закончил|завершил|уже\s+закончил|ты\s+закончил|готово)\b', lower) and \
        any(w in lower for w in ("обогащени", "обогат", "обогащ", "enrich")):
@@ -2231,22 +2240,56 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             return
         thinking = await update.message.reply_text(f"🗃️ Ковальски: ищу лейбл «{label_query}» в базе…")
         try:
-            from syncoteca.tools.label_scraper import find_label_in_db
-            result = await loop.run_in_executor(None, find_label_in_db, label_query)
-            if not result:
+            from syncoteca.tools.label_scraper import find_label_in_db, analyze_label, is_running
+            if is_running():
+                await thinking.edit_text("⚠️ Ковальски: парсинг уже запущен. Сначала останови: «стоп парсинг».")
+                return
+            found = await loop.run_in_executor(None, find_label_in_db, label_query)
+            if not found:
                 await thinking.edit_text(
                     f"🗃️ Ковальски: лейбл «{label_query}» не найден в таблице labels.\n"
                     f"Проверь название или добавь лейбл в базу."
                 )
                 return
-            label_id, label_name = result
-            await thinking.edit_text(
-                f"🗃️ Ковальски: найден лейбл «{label_name}» (ID: {label_id}).\n"
-                f"Запускаю парсинг каталога — буду присылать прогресс по альбомам."
+            label_id, label_name = found
+            await thinking.edit_text(f"🗃️ Ковальски: нашёл «{label_name}». Анализирую каталог…")
+            analysis = await loop.run_in_executor(None, analyze_label, label_id)
+            if not analysis:
+                await thinking.edit_text(f"❌ Ковальски: не удалось получить данные каталога для «{label_name}».")
+                return
+            total_albums = analysis["album_count"]
+            remaining = analysis["remaining"]
+            already = analysis["already_done"]
+            est_tracks = analysis["estimated_tracks"]
+            eta_s = analysis["eta_seconds"]
+            eta_h = eta_s // 3600
+            eta_m = (eta_s % 3600) // 60
+            eta_str = f"~{eta_h}ч {eta_m}мин" if eta_h else f"~{eta_m} мин"
+            resume_note = f"\n⏩ Уже обработано: {already} альбомов (продолжу с остановки)." if already else ""
+            msg = (
+                f"🗃️ Ковальски: лейбл «{label_name}» (ID: {label_id})\n"
+                f"📀 Альбомов в каталоге: {total_albums}{resume_note}\n"
+                f"🎵 Осталось обработать: {remaining} альбомов (~{est_tracks} треков)\n"
+                f"⏱ Примерное время: {eta_str}\n\n"
+                f"Запускать парсинг? (да / нет)"
             )
-            asyncio.create_task(_run_label_scrape_task(chat_id, update.get_bot(), label_id, label_name))
+            await thinking.edit_text(msg)
+            _PENDING_LABEL_SCRAPE[chat_id] = {
+                "label_id": label_id,
+                "label_name": label_name,
+                "analysis": analysis,
+            }
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка поиска лейбла: {e}")
+
+    elif intent == "stop_scrape":
+        from syncoteca.tools.label_scraper import cancel_scrape, is_running
+        if is_running():
+            cancel_scrape()
+            await update.message.reply_text("🛑 Ковальски: отправляю сигнал остановки. Парсинг завершится после текущего альбома.")
+        else:
+            await update.message.reply_text("🗃️ Ковальски: парсинг сейчас не запущен.")
+        _PENDING_LABEL_SCRAPE.pop(chat_id, None)
 
 
 async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: str) -> None:
@@ -2254,21 +2297,41 @@ async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: s
     import asyncio as _asyncio
     import time as _time
 
+    STATUS_INTERVAL_S = 1800  # send status every 30 min
+
     loop = _asyncio.get_event_loop()
     progress_msg = await bot.send_message(chat_id, f"⏳ Парсинг «{label_name}»: получаю список альбомов…")
     _last_edit = [0.0]
+    _last_status = [_time.monotonic()]
+    _state = [{"done": 0, "total": 0, "added": 0, "last_info": ""}]
 
     def _progress(done: int, total: int, info: str) -> None:
         now = _time.monotonic()
-        if now - _last_edit[0] < 4.0:
-            return
-        _last_edit[0] = now
-        text = f"⏳ «{label_name}»: {done}/{total} альбомов\n✅ {info}"
-        fut = _asyncio.run_coroutine_threadsafe(progress_msg.edit_text(text), loop)
-        try:
-            fut.result(timeout=5)
-        except Exception:
-            pass
+        _state[0].update({"done": done, "total": total, "last_info": info})
+        # Edit live progress message
+        if now - _last_edit[0] >= 4.0:
+            _last_edit[0] = now
+            text = f"⏳ «{label_name}»: {done}/{total} альбомов\n✅ {info}"
+            fut = _asyncio.run_coroutine_threadsafe(progress_msg.edit_text(text), loop)
+            try:
+                fut.result(timeout=5)
+            except Exception:
+                pass
+        # Send 30-min status summary as new message
+        if now - _last_status[0] >= STATUS_INTERVAL_S:
+            _last_status[0] = now
+            pct = int(done / total * 100) if total else 0
+            status_text = (
+                f"📊 Ковальски: статус парсинга «{label_name}»\n"
+                f"Прогресс: {done}/{total} альбомов ({pct}%)\n"
+                f"Последний: {info}\n"
+                f"Для остановки: «стоп парсинг»"
+            )
+            fut2 = _asyncio.run_coroutine_threadsafe(bot.send_message(chat_id, status_text), loop)
+            try:
+                fut2.result(timeout=10)
+            except Exception:
+                pass
 
     try:
         result = await loop.run_in_executor(None, lambda: scrape_label(label_id, progress_cb=_progress))
@@ -2285,8 +2348,14 @@ async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: s
         await bot.send_message(chat_id, "⚠️ Ковальски: парсинг уже запущен, дождись завершения.")
         return
 
+    cancelled = result.get("cancelled", False)
+    heading = (
+        f"🛑 Ковальски: парсинг «{result.get('label_name') or label_name}» остановлен."
+        if cancelled else
+        f"✅ Ковальски: парсинг «{result.get('label_name') or label_name}» завершён."
+    )
     lines = [
-        f"🗃️ Ковальски: парсинг «{result.get('label_name') or label_name}» завершён.",
+        heading,
         f"Альбомов обработано: {result.get('albums_done', 0)} из {result.get('albums_total', 0)}.",
         f"✅ Добавлено треков: {result.get('added', 0)}",
     ]
@@ -2294,6 +2363,8 @@ async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: s
         lines.append(f"⏭ Пропущено (уже есть): {result['skipped']}")
     if result.get("errors"):
         lines.append(f"❌ Ошибок: {result['errors']}")
+    if cancelled:
+        lines.append("💡 Для продолжения: «спарси лейбл» снова — начнёт с того места.")
     await bot.send_message(chat_id, "\n".join(lines))
 
 
@@ -2389,6 +2460,27 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                 return
             else:
                 _PENDING_DATE_FIX.pop(chat_id_early, None)
+
+        # Pending label-scrape confirmation
+        if chat_id_early in _PENDING_LABEL_SCRAPE:
+            lower_req = user_request.lower().strip(".,!? ")
+            _yes_words = {"да", "конечно", "давай", "ок", "окей", "угу", "ага", "yes", "подтверждаю", "запускай", "поехали"}
+            _no_words = {"нет", "не надо", "отмена", "стоп", "cancel", "no", "отменить", "не сейчас"}
+            if lower_req in _yes_words or lower_req.startswith("да"):
+                pending = _PENDING_LABEL_SCRAPE.pop(chat_id_early)
+                await update.message.reply_text(
+                    f"🗃️ Ковальски: запускаю парсинг «{pending['label_name']}».\n"
+                    f"Прогресс — каждые 30 минут. Для остановки: «стоп парсинг»."
+                )
+                asyncio.create_task(_run_label_scrape_task(
+                    chat_id_early, update.get_bot(),
+                    pending["label_id"], pending["label_name"],
+                ))
+                return
+            elif lower_req in _no_words or any(w in lower_req for w in ("не надо", "не сейчас", "отмен")):
+                _PENDING_LABEL_SCRAPE.pop(chat_id_early, None)
+                await update.message.reply_text("🗃️ Ковальски: парсинг отменён.")
+                return
 
         intent = _kowalski_detect_intent(user_request)
         if intent:
@@ -3153,6 +3245,81 @@ async def handle_enrich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     asyncio.create_task(_run_enrich_task(chat_id, context.bot, limit))
 
 
+async def handle_parse_label(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/parse_label <name> — Kowalski analyzes + scrapes full Yandex Music label catalog."""
+    if not _is_owner(update):
+        return await _deny(update)
+    label_query = " ".join(context.args).strip() if context.args else ""
+    chat_id = update.effective_chat.id
+    ACTIVE_AGENT[chat_id] = "content_manager"
+    _persist_active_agent(chat_id, "content_manager")
+    if not label_query:
+        await update.message.reply_text(
+            "🗃️ Ковальски: укажи название лейбла.\n"
+            "Пример: /parse_label Sony Music"
+        )
+        return
+    # Reuse the same handler logic via fake intent dispatch
+    loop = asyncio.get_event_loop()
+    thinking = await update.message.reply_text(f"🗃️ Ковальски: ищу лейбл «{label_query}» в базе…")
+    try:
+        from syncoteca.tools.label_scraper import find_label_in_db, analyze_label, is_running
+        if is_running():
+            await thinking.edit_text("⚠️ Ковальски: парсинг уже запущен. Сначала останови: /stop_label_parse")
+            return
+        found = await loop.run_in_executor(None, find_label_in_db, label_query)
+        if not found:
+            await thinking.edit_text(
+                f"🗃️ Ковальски: лейбл «{label_query}» не найден в таблице labels.\n"
+                f"Проверь название или добавь лейбл в базу."
+            )
+            return
+        label_id, label_name = found
+        await thinking.edit_text(f"🗃️ Ковальски: нашёл «{label_name}». Анализирую каталог…")
+        analysis = await loop.run_in_executor(None, analyze_label, label_id)
+        if not analysis:
+            await thinking.edit_text(f"❌ Не удалось получить данные каталога для «{label_name}».")
+            return
+        total_albums = analysis["album_count"]
+        remaining = analysis["remaining"]
+        already = analysis["already_done"]
+        est_tracks = analysis["estimated_tracks"]
+        eta_s = analysis["eta_seconds"]
+        eta_h = eta_s // 3600
+        eta_m = (eta_s % 3600) // 60
+        eta_str = f"~{eta_h}ч {eta_m}мин" if eta_h else f"~{eta_m} мин"
+        resume_note = f"\n⏩ Уже обработано: {already} альбомов (продолжу с остановки)." if already else ""
+        msg = (
+            f"🗃️ Ковальски: лейбл «{label_name}» (ID: {label_id})\n"
+            f"📀 Альбомов в каталоге: {total_albums}{resume_note}\n"
+            f"🎵 Осталось обработать: {remaining} альбомов (~{est_tracks} треков)\n"
+            f"⏱ Примерное время: {eta_str}\n\n"
+            f"Запускать парсинг? (да / нет)"
+        )
+        await thinking.edit_text(msg)
+        _PENDING_LABEL_SCRAPE[chat_id] = {
+            "label_id": label_id,
+            "label_name": label_name,
+            "analysis": analysis,
+        }
+    except Exception as e:
+        await thinking.edit_text(f"❌ Ошибка: {e}")
+
+
+async def handle_stop_label_parse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/stop_label_parse — Stop the running label catalog scrape."""
+    if not _is_owner(update):
+        return await _deny(update)
+    from syncoteca.tools.label_scraper import cancel_scrape, is_running
+    chat_id = update.effective_chat.id
+    _PENDING_LABEL_SCRAPE.pop(chat_id, None)
+    if is_running():
+        cancel_scrape()
+        await update.message.reply_text("🛑 Ковальски: сигнал остановки отправлен. Парсинг завершится после текущего альбома.")
+    else:
+        await update.message.reply_text("🗃️ Ковальски: парсинг сейчас не запущен.")
+
+
 async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/stop — clear sticky agent, teach mode, return to coordinator."""
     if not _is_owner(update):
@@ -3174,6 +3341,8 @@ async def post_init(app: Application) -> None:
         BotCommand("license", "→ Рико (лицензии, права)"),
         BotCommand("kowalski", "→ Ковальски (контент, каталог, метаданные, даты)"),
         BotCommand("enrich", "Ковальски / Обогащение треков (Яндекс Музыка)"),
+        BotCommand("parse_label", "Ковальски / Парсинг каталога лейбла"),
+        BotCommand("stop_label_parse", "Ковальски / Остановить парсинг лейбла"),
         BotCommand("verify_dates", "Ковальски / Перепроверить даты через Discogs"),
         BotCommand("lawyer", "→ Ксюша (договоры, юрист)"),
         BotCommand("accountant", "→ Марина (роялти, бухгалтерия)"),
@@ -3211,6 +3380,8 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("fix_dates", handle_fix_dates))
     app.add_handler(CommandHandler("verify_dates", handle_verify_dates))
     app.add_handler(CommandHandler("enrich", handle_enrich))
+    app.add_handler(CommandHandler("parse_label", handle_parse_label))
+    app.add_handler(CommandHandler("stop_label_parse", handle_stop_label_parse))
     app.add_handler(CommandHandler("export", handle_export))
     app.add_handler(CommandHandler("check_catalog", handle_check_catalog))
     app.add_handler(CommandHandler("export_anomalies", handle_export_anomalies))

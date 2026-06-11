@@ -15,8 +15,41 @@ import httpx
 
 ZENROWS_KEY = os.getenv("ZENROWS_KEY", "ed22055fcc6e65f4ebb401a7fdb3243c11592594")
 DELAY_ALBUM_S = 5.0
+AVG_TRACKS_PER_ALBUM = 10  # rough estimate for ETA
 
 _running: bool = False
+_cancel_requested: bool = False
+
+
+def cancel_scrape() -> None:
+    global _cancel_requested
+    _cancel_requested = True
+
+
+def is_running() -> bool:
+    return _running
+
+
+def analyze_label(label_id: str) -> Optional[dict]:
+    """Fetch album count from page 0 pager. Returns {album_count, estimated_tracks, eta_seconds} or None."""
+    try:
+        raw = _zenrows_get(f"https://api.music.yandex.ru/labels/{label_id}/albums?page=0")
+        body = _parse_body(raw)
+        result = body.get("result") or {}
+        pager = result.get("pager") or {}
+        album_count = pager.get("total", 0)
+        already_done = len(get_processed_album_ids(label_id))
+        remaining = max(0, album_count - already_done)
+        eta_s = int(remaining * (DELAY_ALBUM_S + 1.5))
+        return {
+            "album_count": album_count,
+            "already_done": already_done,
+            "remaining": remaining,
+            "estimated_tracks": remaining * AVG_TRACKS_PER_ALBUM,
+            "eta_seconds": eta_s,
+        }
+    except Exception:
+        return None
 
 
 def _sb_headers() -> dict:
@@ -145,12 +178,13 @@ def scrape_label(
     progress_cb(albums_done, albums_total, info_str) called after each album.
     Returns {"label_name", "added", "skipped", "errors", "albums_total", "albums_done"}.
     """
-    global _running
+    global _running, _cancel_requested
 
     if _running:
         return {"error": "already_running"}
 
     _running = True
+    _cancel_requested = False
     try:
         all_ids = fetch_label_album_ids(label_id)
         if not all_ids:
@@ -162,9 +196,17 @@ def scrape_label(
 
         label_name = None
         added = skipped = errors = 0
+        ai = -1
 
+        cancelled = False
         for ai, album_id in enumerate(to_process):
+            if _cancel_requested:
+                cancelled = True
+                break
             time.sleep(DELAY_ALBUM_S)
+            if _cancel_requested:
+                cancelled = True
+                break
             try:
                 album = fetch_album_tracks(album_id)
             except Exception:
@@ -226,7 +268,9 @@ def scrape_label(
             "skipped": skipped,
             "errors": errors,
             "albums_total": len(all_ids),
-            "albums_done": len(to_process),
+            "albums_done": ai + 1 if to_process else 0,
+            "cancelled": cancelled,
         }
     finally:
         _running = False
+        _cancel_requested = False
