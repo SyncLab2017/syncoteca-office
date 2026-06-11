@@ -2209,18 +2209,26 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         import re as _re
         m = _re.search(r'\b(\d{1,4})\b', text)
         limit = min(int(m.group(1)), 1000) if m else 250
+        thinking = await update.message.reply_text("🗃️ Ковальски: пошёл посмотрю что есть для работы…")
         try:
             from syncoteca.tools.yandex_enricher import count_empty_tracks
             total_pending = await loop.run_in_executor(None, count_empty_tracks)
         except Exception:
             total_pending = "?"
+        if str(total_pending) == "0":
+            reply = "🗃️ Ковальски: а у нас всё в базе хорошо — пустых треков нет."
+            await thinking.edit_text(reply)
+            history = DIRECT_SESSIONS["content_manager"][chat_id]
+            history.append({"role": "user", "content": text})
+            history.append({"role": "assistant", "content": reply})
+            DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
+            return
         eta = f"~{int(total_pending) * 4 // 60} мин" if str(total_pending).isdigit() and int(total_pending) > 0 else "несколько минут"
         reply = (
-            f"🗃️ Ковальски: иду работать.\n"
-            f"Нашёл {total_pending} треков без метаданных.\n"
-            f"Займёт {eta}."
+            f"🗃️ Ковальски: нашёл {total_pending} треков без метаданных.\n"
+            f"Займёт {eta}. Иду работать."
         )
-        await update.message.reply_text(reply)
+        await thinking.edit_text(reply)
         history = DIRECT_SESSIONS["content_manager"][chat_id]
         history.append({"role": "user", "content": text})
         history.append({"role": "assistant", "content": reply})
@@ -3229,19 +3237,23 @@ async def handle_enrich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     _persist_active_agent(chat_id, "content_manager")
 
     loop = asyncio.get_event_loop()
+    thinking = await update.message.reply_text("🗃️ Ковальски: пошёл посмотрю что есть для работы…")
     try:
         from syncoteca.tools.yandex_enricher import count_empty_tracks
         total_pending = await loop.run_in_executor(None, count_empty_tracks)
     except Exception:
         total_pending = "?"
 
+    if str(total_pending) == "0":
+        await thinking.edit_text("🗃️ Ковальски: а у нас всё в базе хорошо — пустых треков нет.")
+        return
+
     eta = f"~{int(total_pending) * 4 // 60} мин" if str(total_pending).isdigit() and int(total_pending) > 0 else "несколько минут"
     reply = (
-        f"🗃️ Ковальски: иду работать.\n"
-        f"Нашёл {total_pending} треков без метаданных.\n"
-        f"Займёт {eta}."
+        f"🗃️ Ковальски: нашёл {total_pending} треков без метаданных.\n"
+        f"Займёт {eta}. Иду работать."
     )
-    await update.message.reply_text(reply)
+    await thinking.edit_text(reply)
     asyncio.create_task(_run_enrich_task(chat_id, context.bot, limit))
 
 
