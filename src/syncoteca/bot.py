@@ -1911,6 +1911,10 @@ def _kowalski_detect_intent(text: str) -> str | None:
         return "export_anomalies"
     if "последн" in lower and any(w in lower for w in ("трек", "добав", "загруз", "по id")):
         return "recent"
+    # Status queries about enrichment must NOT trigger a new enrich run
+    if re.search(r'\b(закончил|завершил|уже\s+закончил|ты\s+закончил|готово)\b', lower) and \
+       any(w in lower for w in ("обогащени", "обогат", "обогащ", "enrich")):
+        return None
     if any(w in lower for w in (
         "обнови базу", "обогати треки", "обогати базу", "заполни пустые", "пустые треки",
         "обработай треки", "треки без данных", "запусти обогащение", "обновить базу",
@@ -2216,13 +2220,25 @@ async def _run_fix_dates_task(chat_id: int, bot, limit: int, only_null: bool) ->
 async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
     from syncoteca.tools.yandex_enricher import enrich_batch
     import asyncio as _asyncio
+    import time as _time
 
     loop = _asyncio.get_event_loop()
 
-    progress_msgs: list[str] = []
+    # Live progress message — edited per track so Denis sees activity
+    progress_msg = await bot.send_message(chat_id, "⏳ Начинаю обогащение…")
+    _last_edit = [0.0]  # mutable for closure
 
-    def _progress(done: int, total: int, last_title: str) -> None:
-        progress_msgs.append(f"  ✓ {done}/{total} — {last_title}")
+    def _progress(done: int, total: int, info: str) -> None:
+        now = _time.monotonic()
+        if now - _last_edit[0] < 3.5:  # respect Telegram edit rate limit
+            return
+        _last_edit[0] = now
+        text = f"⏳ Обогащение: {done}/{total}\n✅ {info}"
+        fut = _asyncio.run_coroutine_threadsafe(progress_msg.edit_text(text), loop)
+        try:
+            fut.result(timeout=5)
+        except Exception:
+            pass
 
     try:
         result = await loop.run_in_executor(None, lambda: enrich_batch(limit=limit, progress_cb=_progress))
@@ -2236,6 +2252,11 @@ async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
     total = result.get("total", 0)
     min_id = result.get("min_id", 0)
 
+    try:
+        await progress_msg.delete()
+    except Exception:
+        pass
+
     lines = ["🗃️ Ковальски: обогащение завершено.", f"Обработано: {total} треков."]
     if ok:
         lines.append(f"✅ Успешно: {ok}")
@@ -2243,9 +2264,6 @@ async def _run_enrich_task(chat_id: int, bot, limit: int) -> None:
         lines.append(f"⏭ Пропущено (нет ссылки): {skipped}")
     if errors:
         lines.append(f"❌ Ошибок: {errors}")
-    if progress_msgs:
-        lines.append("\nПоследние обработанные:")
-        lines.extend(progress_msgs[-5:])
 
     if ok > 0:
         date_limit = ok + 20

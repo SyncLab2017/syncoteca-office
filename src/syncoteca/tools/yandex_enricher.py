@@ -214,8 +214,12 @@ def enrich_batch(
 
         last_title = (updates.get("title") or t.get("title") or "?")
         last_artist = (updates.get("artist") or t.get("artist") or "?")
-        if progress_cb and (i + 1) % 10 == 0:
-            progress_cb(i + 1, total, f"«{last_title}» — {last_artist}")
+        last_label = (updates.get("label") or t.get("label") or "")
+        if progress_cb:
+            info_line = f"{last_artist} — {last_title}"
+            if last_label:
+                info_line += f" | Лейбл: {last_label}"
+            progress_cb(i + 1, total, info_line)
 
         time.sleep(DELAY_S)
 
