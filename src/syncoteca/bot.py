@@ -9,6 +9,7 @@ import re
 import tempfile
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 from telegram import Update, BotCommand
