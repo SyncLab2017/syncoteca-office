@@ -2077,7 +2077,7 @@ _ARTIST_FILLER = {
 
 def _export_filters_are_clean(filters: dict) -> bool:
     """Return True if parsed filters look like a genuine artist/year/label (not conversational noise)."""
-    if filters.get("year_from") or filters.get("label") or filters.get("genre") or filters.get("date_added") or filters.get("release_day"):
+    if filters.get("year_from") or filters.get("label") or filters.get("genre") or filters.get("date_added") or filters.get("release_day") or filters.get("music_authors"):
         return True
     artist = filters.get("artist", "")
     if not artist:
@@ -2204,25 +2204,23 @@ def _build_label_scrape_prompt(
 
 
 async def _send_excel_by_email(update: Update, query: str, subject: str) -> None:
-    """Re-fetch Excel from Supabase and send via SMTP to OWNER_EMAIL."""
+    """Re-fetch Excel from Supabase and send via Resend API (primary) or SMTP (fallback)."""
+    import base64
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.base import MIMEBase
     from email.mime.text import MIMEText
     from email import encoders
 
+    owner_email = os.getenv("OWNER_EMAIL", "denis@synclab.pro")
+    resend_key = os.getenv("RESEND_API_KEY", "")
     smtp_host = os.getenv("EMAIL_SMTP_HOST", "")
     smtp_user = os.getenv("EMAIL_SMTP_USER", "")
     smtp_pass = os.getenv("EMAIL_SMTP_PASS", "")
     smtp_port = int(os.getenv("EMAIL_SMTP_PORT", "587"))
-    owner_email = os.getenv("OWNER_EMAIL", "denis@synclab.pro")
 
-    if not smtp_host or not smtp_user or not smtp_pass:
-        await update.message.reply_text(
-            "❌ SMTP не настроен.\n"
-            "Добавь в Railway env:\n"
-            "EMAIL_SMTP_HOST, EMAIL_SMTP_USER, EMAIL_SMTP_PASS"
-        )
+    if not resend_key and not (smtp_host and smtp_user and smtp_pass):
+        await update.message.reply_text("❌ Ни RESEND_API_KEY, ни SMTP не настроены в Railway env.")
         return
 
     thinking = await update.message.reply_text("📧 Формирую файл для отправки…")
@@ -2231,24 +2229,46 @@ async def _send_excel_by_email(update: Update, query: str, subject: str) -> None
         loop = asyncio.get_event_loop()
         xlsx_bytes, filename, count, _ = await loop.run_in_executor(None, export_catalog, query)
 
-        msg = MIMEMultipart()
-        msg["From"] = smtp_user
-        msg["To"] = owner_email
-        msg["Subject"] = f"Синкотека — {subject} ({count} треков)"
-        msg.attach(MIMEText(f"Выгрузка каталога: {subject}\n{count} треков.", "plain", "utf-8"))
-        part = MIMEBase("application", "octet-stream")
-        part.set_payload(xlsx_bytes)
-        encoders.encode_base64(part)
-        part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
-        msg.attach(part)
+        email_subject = f"Синкотека — {subject} ({count} треков)"
+        email_body = f"Выгрузка каталога: {subject}\n{count} треков."
 
-        def _smtp_send():
-            with smtplib.SMTP(smtp_host, smtp_port) as s:
-                s.starttls()
-                s.login(smtp_user, smtp_pass)
-                s.sendmail(smtp_user, owner_email, msg.as_string())
+        if resend_key:
+            def _resend_send():
+                import httpx as _httpx
+                return _httpx.post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                    json={
+                        "from": smtp_user or "noreply@synclab.pro",
+                        "to": [owner_email],
+                        "subject": email_subject,
+                        "text": email_body,
+                        "attachments": [{"filename": filename, "content": base64.b64encode(xlsx_bytes).decode()}],
+                    },
+                    timeout=30,
+                )
+            r = await loop.run_in_executor(None, _resend_send)
+            r.raise_for_status()
+        else:
+            msg = MIMEMultipart()
+            msg["From"] = smtp_user
+            msg["To"] = owner_email
+            msg["Subject"] = email_subject
+            msg.attach(MIMEText(email_body, "plain", "utf-8"))
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(xlsx_bytes)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+            msg.attach(part)
 
-        await loop.run_in_executor(None, _smtp_send)
+            def _smtp_send():
+                with smtplib.SMTP(smtp_host, smtp_port) as s:
+                    s.starttls()
+                    s.login(smtp_user, smtp_pass)
+                    s.sendmail(smtp_user, owner_email, msg.as_string())
+
+            await loop.run_in_executor(None, _smtp_send)
+
         await thinking.edit_text(f"✅ Отправлено на {owner_email} ({count} треков).")
     except Exception as e:
         await thinking.edit_text(f"❌ Ошибка отправки письма: {e}")

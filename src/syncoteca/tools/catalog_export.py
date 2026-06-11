@@ -240,6 +240,28 @@ def parse_export_query(text: str) -> dict:
             if artist:
                 filters["artist"] = artist
 
+    # Music author: "автор X" / "по автору X" / "авторам X и Y" / "соавторство X и Y"
+    # Supports one or two co-authors separated by "и"
+    if not filters.get("music_authors"):
+        _actx = (r"(?:авт[оа]р(?:а|у|ом|ов|ам|е|ах|ами)?"
+                 r"|по\s+авт[оа]р(?:у|ам|ов|е)?"
+                 r"|соавтор(?:а|у|ов|ам|ству|ство|е)?"
+                 r"|треки\s+авт[оа]ра?)")
+        # Pattern A: two names — "автора X и Y"
+        m2 = re.search(
+            _actx + r"\s+([А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z\s.]{1,40}?)\s+и\s+([А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z\s.]{1,40}?)(?=\s*(?:[.,!?]|$|\bвыгруз|\bсколько))",
+            text, re.IGNORECASE,
+        )
+        if m2:
+            filters["music_authors"] = [m2.group(1).strip().strip(".,!?;:"), m2.group(2).strip().strip(".,!?;:")]
+        else:
+            # Pattern B: single name
+            m1 = re.search(
+                _actx + r"\s+([А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z\s.,-]{1,60}?)(?=\s*(?:[.,!?]|$|\bвыгруз|\bсколько|\bтрек|\bи\b))",
+                text, re.IGNORECASE,
+            )
+            if m1:
+                filters["music_authors"] = [m1.group(1).strip().strip(".,!?;:")]
     # Genre: "жанр шансон" / "стиль рок" / "категория джаз" or bare genre keyword
     m = _GENRE_CONTEXT_RE.search(text)
     if m:
@@ -335,6 +357,11 @@ def parse_export_query(text: str) -> dict:
         if 1 <= len(words) <= 4:
             filters["artist"] = " ".join(words)
 
+    # Clear artist if music_authors already set and artist looks like author-context noise
+    if filters.get("music_authors") and filters.get("artist"):
+        if any(w in filters["artist"].lower() for w in ("автор", "соавтор")):
+            del filters["artist"]
+
     return filters
 
 
@@ -379,6 +406,16 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
                     f'artist.ilike."* {a_stripped}"',
                     f'artist.ilike."* {a_stripped} *"',
                 ])
+
+    # Music author: push first author to DB, rest checked in Python
+    music_authors = filters.get("music_authors") or []
+    if music_authors:
+        a0 = music_authors[0].replace("*", "")
+        # Try both full name and with genitive/accusative stripped
+        a0_stripped = re.sub(r'[аяуюыиеёо]$', '', a0, flags=re.IGNORECASE)
+        for a0v in dict.fromkeys([a0, a0_stripped] if a0_stripped != a0 and len(a0_stripped) >= 3 else [a0]):
+            conditions.append(f"music_author.ilike.*{a0v}*")
+            conditions.append(f"lyrics_author.ilike.*{a0v}*")
 
     if filters.get("label"):
         lb = filters["label"].replace("*", "")
@@ -446,6 +483,17 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
             if (m := re.search(r"\b((?:19|20)\d{2})\b", str(row.get("release_date") or "")))
             and year_from <= int(m.group(1)) <= yt_safe
         ]
+
+    # Music-author post-filter: all co-authors must appear in music_author or lyrics_author
+    if music_authors:
+        def _author_match(row: dict, name: str) -> bool:
+            combined = (row.get("music_author") or "") + " " + (row.get("lyrics_author") or "")
+            # Try full name and genitive/accusative stripped form
+            stripped = re.sub(r'[аяуюыиеёо]$', '', name, flags=re.IGNORECASE)
+            return (name.lower() in combined.lower() or
+                    (stripped != name and len(stripped) >= 3 and stripped.lower() in combined.lower()))
+        for author in music_authors:
+            rows = [r for r in rows if _author_match(r, author)]
 
     # Language post-filter: Cyrillic = Russian, Latin-dominant = foreign
     _lang = filters.get("language")
