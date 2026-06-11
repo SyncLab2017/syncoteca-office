@@ -200,7 +200,8 @@ async def run_date_fix(
             await bot.send_message(chat_id, "✅ Ковальски: треков без даты не найдено — база актуальна.")
             return
 
-        await bot.send_message(chat_id, f"📋 Найдено {len(tracks)} треков для проверки. Начинаю…")
+        start_msg = await bot.send_message(chat_id, f"📋 Найдено {len(tracks)} треков для проверки. Начинаю…")
+        progress_msg = await bot.send_message(chat_id, "⏳ [0/" + str(len(tracks)) + "] Стартую…")
 
         updated = skipped = not_found = errors = 0
 
@@ -236,21 +237,30 @@ async def run_date_fix(
                     await bot.send_message(chat_id, f"❌ Ковальски: Discogs token недействителен. Остановка.")
                     return
 
-            # Progress report every N tracks
+            # Edit single progress message every N tracks
             if (i + 1) % _REPORT_EVERY == 0:
                 remaining = len(tracks) - (i + 1)
-                await bot.send_message(
-                    chat_id,
-                    f"⏳ [{i+1}/{len(tracks)}] осталось ~{remaining}с\n"
-                    f"✅ Обновлено: {updated} | ⏭ Без изменений: {skipped} | "
-                    f"❓ Не найдено: {not_found} | ❌ Ошибки: {errors}",
-                )
+                try:
+                    await progress_msg.edit_text(
+                        f"⏳ [{i+1}/{len(tracks)}] осталось ~{remaining}с\n"
+                        f"✅ Обновлено: {updated} | ⏭ Без изменений: {skipped} | "
+                        f"❓ Не найдено: {not_found} | ❌ Ошибки: {errors}",
+                    )
+                except Exception:
+                    pass
 
             await asyncio.sleep(_DELAY_S)
 
+        try:
+            await progress_msg.delete()
+        except Exception:
+            pass
+
+        from datetime import date as _date
+        today = _date.today().strftime("%d.%m.%Y")
         await bot.send_message(
             chat_id,
-            f"🗃️ Ковальски: проверка завершена\n"
+            f"🗃️ Ковальски: проверка дат завершена — {today}\n"
             f"✅ Обновлено: {updated}\n"
             f"⏭ Без изменений: {skipped}\n"
             f"❓ Не найдено на Discogs: {not_found}\n"

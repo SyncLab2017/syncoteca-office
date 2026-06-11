@@ -2550,13 +2550,18 @@ async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: s
         return
 
     cancelled = result.get("cancelled", False)
+    final_label = result.get("label_name") or label_name
     heading = (
-        f"🛑 Ковальски: парсинг «{result.get('label_name') or label_name}» остановлен."
+        f"🛑 Ковальски: парсинг «{final_label}» остановлен."
         if cancelled else
-        f"✅ Ковальски: парсинг «{result.get('label_name') or label_name}» завершён."
+        f"✅ Ковальски: парсинг «{final_label}» завершён."
     )
+    from datetime import date as _date
+    today_str = _date.today().strftime("%d.%m.%Y")
+    hashtag = "#" + re.sub(r"[^\w]", "_", final_label).strip("_")
     lines = [
         heading,
+        f"📅 Дата: {today_str}",
         f"Альбомов обработано: {result.get('albums_done', 0)} из {result.get('albums_total', 0)}.",
         f"✅ Добавлено треков: {result.get('added', 0)}",
     ]
@@ -2566,6 +2571,7 @@ async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: s
         lines.append(f"❌ Ошибок: {result['errors']}")
     if cancelled:
         lines.append("💡 Для продолжения: «спарси лейбл» снова — начнёт с того места.")
+    lines.append(f"\n{hashtag} #парсинг_лейбла")
     await bot.send_message(chat_id, "\n".join(lines))
 
 
