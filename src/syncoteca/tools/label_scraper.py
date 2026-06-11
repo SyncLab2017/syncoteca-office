@@ -265,9 +265,6 @@ def scrape_label(
                     a["name"] for a in (track.get("artists") or album.get("artists") or [])
                 )
                 row = {
-                    "label_id": label_id,
-                    "label_name": label_name,
-                    "album_id": str(album_id),
                     "title": track.get("title"),
                     "artist": track_artists or album_artists,
                     "album": album_title,
