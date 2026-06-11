@@ -2149,6 +2149,48 @@ def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
     return text  # last resort
 
 
+def _build_label_scrape_prompt(
+    label_id: str,
+    label_name: str,
+    analysis: Optional[dict],
+    sublabels: list,
+) -> tuple[str, dict]:
+    """Build confirmation message + pending dict for label scrape."""
+    album_info = ""
+    if analysis:
+        total = analysis.get("album_count", 0)
+        eta_s = analysis.get("eta_seconds", 0)
+        eta_h = eta_s // 3600
+        eta_m = (eta_s % 3600) // 60
+        eta_str = f"~{eta_h}ч {eta_m}мин" if eta_h else f"~{eta_m} мин"
+        album_info = f" — {total} альбомов (~{eta_str})"
+
+    if sublabels:
+        sub_names = [s["name"] for s in sublabels]
+        shown = sub_names[:10]
+        more = len(sub_names) - 10
+        subs_preview = ", ".join(shown) + (f" ...и ещё {more}" if more > 0 else "")
+        msg = (
+            f"🗃️ Ковальски: лейбл «{label_name}»{album_info}\n\n"
+            f"📂 У него {len(sublabels)} саблейблов:\n{subs_preview}\n\n"
+            f"Что парсить?\n"
+            f"1️⃣ Только «{label_name}»\n"
+            f"2️⃣ «{label_name}» + все {len(sublabels)} саблейблов\n"
+            f"3️⃣ Только саблейблы (без основного)\n"
+            f"Или назови конкретный саблейбл"
+        )
+        pending = {"stage": "sublabel_choice", "label_id": label_id, "label_name": label_name,
+                   "analysis": analysis, "sublabels": sublabels}
+    else:
+        msg = (
+            f"🗃️ Ковальски: лейбл «{label_name}»{album_info}\n\n"
+            f"Запускать парсинг? (да / нет)"
+        )
+        pending = {"stage": "confirm", "label_id": label_id, "label_name": label_name,
+                   "analysis": analysis, "sublabels": []}
+    return msg, pending
+
+
 async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
     """Execute a Kowalski catalog tool triggered by natural language."""
     import io
@@ -2333,54 +2375,21 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                 return
             label_id, label_name = found
             await thinking.edit_text(f"🗃️ Ковальски: нашёл «{label_name}». Анализирую каталог…")
-            analysis, sublabels = await asyncio.gather(
-                loop.run_in_executor(None, analyze_label, label_id),
-                loop.run_in_executor(None, find_sublabels, label_name),
-            )
-            if not analysis:
-                await thinking.edit_text(f"❌ Ковальски: не удалось получить данные каталога для «{label_name}».")
-                return
-            total_albums = analysis["album_count"]
-            eta_s = analysis["eta_seconds"]
-            eta_h = eta_s // 3600
-            eta_m = (eta_s % 3600) // 60
-            eta_str = f"~{eta_h}ч {eta_m}мин" if eta_h else f"~{eta_m} мин"
+            try:
+                analysis, sublabels = await asyncio.wait_for(
+                    asyncio.gather(
+                        loop.run_in_executor(None, analyze_label, label_id),
+                        loop.run_in_executor(None, find_sublabels, label_name),
+                    ),
+                    timeout=40.0,
+                )
+            except asyncio.TimeoutError:
+                analysis, sublabels = None, []
+            except Exception:
+                analysis, sublabels = None, []
 
-            if sublabels:
-                # Multi-label choice flow
-                sub_names = [s["name"] for s in sublabels]
-                shown = sub_names[:10]
-                more = len(sub_names) - 10
-                subs_preview = ", ".join(shown) + (f" ...и ещё {more}" if more > 0 else "")
-                msg = (
-                    f"🗃️ Ковальски: вижу лейбл «{label_name}» — {total_albums} альбомов (~{eta_str})\n\n"
-                    f"📂 У него {len(sublabels)} саблейблов:\n{subs_preview}\n\n"
-                    f"Что парсить?\n"
-                    f"1️⃣ Только «{label_name}»\n"
-                    f"2️⃣ «{label_name}» + все {len(sublabels)} саблейблов\n"
-                    f"3️⃣ Только саблейблы (без основного)\n"
-                    f"Или назови конкретный саблейбл"
-                )
-                _PENDING_LABEL_SCRAPE[chat_id] = {
-                    "stage": "sublabel_choice",
-                    "label_id": label_id,
-                    "label_name": label_name,
-                    "analysis": analysis,
-                    "sublabels": sublabels,
-                }
-            else:
-                # Simple да/нет flow
-                msg = (
-                    f"🗃️ Ковальски: вижу лейбл «{label_name}» — {total_albums} альбомов (~{eta_str})\n\n"
-                    f"Запускать парсинг? (да / нет)"
-                )
-                _PENDING_LABEL_SCRAPE[chat_id] = {
-                    "stage": "confirm",
-                    "label_id": label_id,
-                    "label_name": label_name,
-                    "analysis": analysis,
-                    "sublabels": [],
-                }
+            msg, pending = _build_label_scrape_prompt(label_id, label_name, analysis, sublabels)
+            _PENDING_LABEL_SCRAPE[chat_id] = pending
             await thinking.edit_text(msg)
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка поиска лейбла: {e}")
@@ -3457,51 +3466,20 @@ async def handle_parse_label(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         label_id, label_name = found
         await thinking.edit_text(f"🗃️ Ковальски: нашёл «{label_name}». Анализирую каталог…")
-        analysis, sublabels = await asyncio.gather(
-            loop.run_in_executor(None, analyze_label, label_id),
-            loop.run_in_executor(None, find_sublabels, label_name),
-        )
-        if not analysis:
-            await thinking.edit_text(f"❌ Не удалось получить данные каталога для «{label_name}».")
-            return
-        total_albums = analysis["album_count"]
-        eta_s = analysis["eta_seconds"]
-        eta_h = eta_s // 3600
-        eta_m = (eta_s % 3600) // 60
-        eta_str = f"~{eta_h}ч {eta_m}мин" if eta_h else f"~{eta_m} мин"
-        if sublabels:
-            sub_names = [s["name"] for s in sublabels]
-            shown = sub_names[:10]
-            more = len(sub_names) - 10
-            subs_preview = ", ".join(shown) + (f" ...и ещё {more}" if more > 0 else "")
-            msg = (
-                f"🗃️ Ковальски: вижу лейбл «{label_name}» — {total_albums} альбомов (~{eta_str})\n\n"
-                f"📂 У него {len(sublabels)} саблейблов:\n{subs_preview}\n\n"
-                f"Что парсить?\n"
-                f"1️⃣ Только «{label_name}»\n"
-                f"2️⃣ «{label_name}» + все {len(sublabels)} саблейблов\n"
-                f"3️⃣ Только саблейблы (без основного)\n"
-                f"Или назови конкретный саблейбл"
+        try:
+            analysis, sublabels = await asyncio.wait_for(
+                asyncio.gather(
+                    loop.run_in_executor(None, analyze_label, label_id),
+                    loop.run_in_executor(None, find_sublabels, label_name),
+                ),
+                timeout=40.0,
             )
-            _PENDING_LABEL_SCRAPE[chat_id] = {
-                "stage": "sublabel_choice",
-                "label_id": label_id,
-                "label_name": label_name,
-                "analysis": analysis,
-                "sublabels": sublabels,
-            }
-        else:
-            msg = (
-                f"🗃️ Ковальски: вижу лейбл «{label_name}» — {total_albums} альбомов (~{eta_str})\n\n"
-                f"Запускать парсинг? (да / нет)"
-            )
-            _PENDING_LABEL_SCRAPE[chat_id] = {
-                "stage": "confirm",
-                "label_id": label_id,
-                "label_name": label_name,
-                "analysis": analysis,
-                "sublabels": [],
-            }
+        except (asyncio.TimeoutError, Exception):
+            analysis, sublabels = None, []
+
+        msg, pending = _build_label_scrape_prompt(label_id, label_name, analysis, sublabels)
+        _PENDING_LABEL_SCRAPE[chat_id] = pending
+        await thinking.edit_text(msg)
     except Exception as e:
         await thinking.edit_text(f"❌ Ошибка: {e}")
 
