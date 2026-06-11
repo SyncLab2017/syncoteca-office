@@ -164,6 +164,12 @@ def parse_export_query(text: str) -> dict:
         filters["artist"] = _strip_quotes(m.group(1).strip())
         return filters
 
+    # Language/nationality filter
+    if any(w in lower for w in ("только русск", "русские произведени", "русскоязычн", "не иностранн", "без иностранн", "отечественн")):
+        filters["language"] = "ru"
+    elif any(w in lower for w in ("только иностранн", "зарубежн", "не русск", "английск")):
+        filters["language"] = "foreign"
+
     # Year range: "1975-1980" / "1975–1980"
     # Do NOT return early — continue to extract artist/label from the same query
     # so "Барыкин 1990-2000" gets both artist AND year_from/year_to.
@@ -302,6 +308,7 @@ def parse_export_query(text: str) -> dict:
             "классические", "классическая", "классический",
             "старые", "старая", "старый", "старых",
             "новые", "новая", "новый", "новых",
+            "только", "лишь", "исключительно",
             "знаешь", "знаете", "имеется", "имеются",
             "наш", "наша", "наше", "наши", "нашем", "нашей",
             "ты", "вы", "он", "она", "они", "я", "мы",
@@ -439,6 +446,15 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
             if (m := re.search(r"\b((?:19|20)\d{2})\b", str(row.get("release_date") or "")))
             and year_from <= int(m.group(1)) <= yt_safe
         ]
+
+    # Language post-filter: Cyrillic = Russian, Latin-dominant = foreign
+    _lang = filters.get("language")
+    if _lang:
+        _cyrillic = re.compile(r'[А-Яа-яЁё]')
+        if _lang == "ru":
+            rows = [r for r in rows if _cyrillic.search(r.get("artist") or r.get("title") or "")]
+        elif _lang == "foreign":
+            rows = [r for r in rows if not _cyrillic.search(r.get("artist") or r.get("title") or "")]
 
     return rows
 

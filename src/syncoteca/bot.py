@@ -1974,7 +1974,12 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "дай файл", "пришли файл", "скинь файл", "сделай файл",
         "полный список", "полную выгрузку", "сделай выгрузку",
         "сделай отчёт", "сделай отчет", "дай отчёт",
+        "в табличку", "в таблицу", "табличку", "таблицу",
     )):
+        return "export"
+    # "делай/сделай/повтори репертуар [за X]" — export without explicit "выгрузи"
+    import re as _re
+    if _re.search(r'(?:делай|сделай|повтори|дай|покажи|сформируй)\s+(?:ещё\s+раз\s+)?репертуар', lower):
         return "export"
     if any(w in lower for w in (
         "проверь даты", "обнови даты", "discogs", "дата дискогс",
@@ -2198,8 +2203,8 @@ def _build_label_scrape_prompt(
     return msg, pending
 
 
-async def _send_excel_by_email(update: Update, xlsx_bytes: bytes, filename: str, subject: str) -> None:
-    """Send Excel file via SMTP to OWNER_EMAIL."""
+async def _send_excel_by_email(update: Update, query: str, subject: str) -> None:
+    """Re-fetch Excel from Supabase and send via SMTP to OWNER_EMAIL."""
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.base import MIMEBase
@@ -2214,23 +2219,29 @@ async def _send_excel_by_email(update: Update, xlsx_bytes: bytes, filename: str,
 
     if not smtp_host or not smtp_user or not smtp_pass:
         await update.message.reply_text(
-            "❌ EMAIL_SMTP_HOST / EMAIL_SMTP_USER / EMAIL_SMTP_PASS не настроены в env."
+            "❌ SMTP не настроен.\n"
+            "Добавь в Railway env:\n"
+            "EMAIL_SMTP_HOST, EMAIL_SMTP_USER, EMAIL_SMTP_PASS"
         )
         return
 
+    thinking = await update.message.reply_text("📧 Формирую файл для отправки…")
     try:
+        from syncoteca.tools.catalog_export import export_catalog
+        loop = asyncio.get_event_loop()
+        xlsx_bytes, filename, count, _ = await loop.run_in_executor(None, export_catalog, query)
+
         msg = MIMEMultipart()
         msg["From"] = smtp_user
         msg["To"] = owner_email
-        msg["Subject"] = f"Синкотека — {subject}"
-        msg.attach(MIMEText(f"Выгрузка каталога: {subject}", "plain", "utf-8"))
+        msg["Subject"] = f"Синкотека — {subject} ({count} треков)"
+        msg.attach(MIMEText(f"Выгрузка каталога: {subject}\n{count} треков.", "plain", "utf-8"))
         part = MIMEBase("application", "octet-stream")
         part.set_payload(xlsx_bytes)
         encoders.encode_base64(part)
         part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
         msg.attach(part)
 
-        loop = asyncio.get_event_loop()
         def _smtp_send():
             with smtplib.SMTP(smtp_host, smtp_port) as s:
                 s.starttls()
@@ -2238,9 +2249,9 @@ async def _send_excel_by_email(update: Update, xlsx_bytes: bytes, filename: str,
                 s.sendmail(smtp_user, owner_email, msg.as_string())
 
         await loop.run_in_executor(None, _smtp_send)
-        await update.message.reply_text(f"✅ Отправлено на {owner_email}.")
+        await thinking.edit_text(f"✅ Отправлено на {owner_email} ({count} треков).")
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка отправки письма: {e}")
+        await thinking.edit_text(f"❌ Ошибка отправки письма: {e}")
 
 
 async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
@@ -2290,9 +2301,9 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                 )
             except Exception as tg_err:
                 logger.warning(f"Telegram file upload timeout (file likely delivered): {tg_err}")
-            # Offer email after sending
+            # Offer email after sending — store query (not bytes) to survive redeploy
             owner_email = os.getenv("OWNER_EMAIL", "denis@synclab.pro")
-            _PENDING_EMAIL_EXPORT[chat_id] = {"xlsx_bytes": xlsx_bytes, "filename": filename, "subject": subject}
+            _PENDING_EMAIL_EXPORT[chat_id] = {"query": export_query, "subject": subject}
             await update.message.reply_text(f"📧 Отправить на {owner_email}?")
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка экспорта: {e}")
@@ -2726,9 +2737,9 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
         _email_affirmations = {"да", "ок", "окей", "да!", "yes", "конечно", "давай", "отправляй", "отправь", "send"}
         if chat_id_early in _PENDING_EMAIL_EXPORT:
             _lower_req = user_request.lower().strip(".,!? ")
-            if _lower_req in _email_affirmations or "почт" in _lower_req or "email" in _lower_req or "отправ" in _lower_req:
+            if _lower_req in _email_affirmations or "почт" in _lower_req or "email" in _lower_req or "отправ" in _lower_req or "направ" in _lower_req:
                 _ep = _PENDING_EMAIL_EXPORT.pop(chat_id_early)
-                await _send_excel_by_email(update, _ep["xlsx_bytes"], _ep["filename"], _ep["subject"])
+                await _send_excel_by_email(update, _ep["query"], _ep["subject"])
                 return
             elif _lower_req in {"нет", "не надо", "не нужно", "no", "cancel", "отмена"}:
                 _PENDING_EMAIL_EXPORT.pop(chat_id_early, None)
