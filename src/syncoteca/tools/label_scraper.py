@@ -157,12 +157,28 @@ def get_processed_album_ids(label_id: str) -> set:
 
 
 def _insert_track(row: dict) -> str:
-    """Insert one track row. Returns 'added', 'skipped', or 'error'."""
+    """Insert one track into tracks table. Returns 'added', 'skipped', or 'error'.
+    Uses link (yandex URL) as unique key — duplicates are ignored silently."""
     headers = {**_sb_headers(), "Prefer": "resolution=ignore-duplicates,return=minimal"}
-    r = httpx.post(f"{_sb_base()}/rest/v1/label_catalog", headers=headers, json=row, timeout=10)
+    r = httpx.post(f"{_sb_base()}/rest/v1/tracks", headers=headers, json=row, timeout=10)
     if r.status_code == 409:
         return "skipped"
-    return "added" if r.is_success else "error"
+    if r.is_success:
+        return "added"
+    # Log unexpected errors
+    return "error"
+
+
+def _mark_album_processed(label_id: str, album_id: str) -> None:
+    """Write a lightweight marker to label_catalog for resume tracking only."""
+    headers = {**_sb_headers(), "Prefer": "resolution=ignore-duplicates,return=minimal"}
+    httpx.post(
+        f"{_sb_base()}/rest/v1/label_catalog",
+        headers=headers,
+        json={"label_id": label_id, "album_id": str(album_id),
+              "track_id": f"_marker_{album_id}", "track_title": "__processed__"},
+        timeout=10,
+    )
 
 
 def _fmt_duration(ms) -> str:
@@ -252,16 +268,17 @@ def scrape_label(
                     "label_id": label_id,
                     "label_name": label_name,
                     "album_id": str(album_id),
-                    "album_title": album_title,
-                    "track_id": track_id,
-                    "track_title": track.get("title"),
+                    "title": track.get("title"),
                     "artist": track_artists or album_artists,
-                    "release_year": album_year,
-                    "release_date": release_date,
+                    "album": album_title,
+                    "label": label_name,
+                    "release_date": release_date or album_year,
                     "duration": _fmt_duration(track.get("durationMs")),
-                    "genre": track.get("genre") or album_genre,
-                    "track_number": track.get("trackNumber") or track_num,
-                    "yandex_url": f"https://music.yandex.ru/album/{album_id}/track/{track_id}",
+                    "genre_1": track.get("genre") or album_genre,
+                    "link": f"https://music.yandex.ru/album/{album_id}/track/{track_id}",
+                    "yandex_id": track_id,
+                    "source_type": "label_scraper",
+                    "album_processed": False,
                 }
                 res = _insert_track(row)
                 if res == "added":
@@ -270,6 +287,12 @@ def scrape_label(
                     skipped += 1
                 else:
                     errors += 1
+
+            # Mark album as processed in label_catalog for resume support
+            try:
+                _mark_album_processed(label_id, album_id)
+            except Exception:
+                pass
 
             if progress_cb:
                 info = f"{album_artists} — {album_title} ({track_num} тр.)"
