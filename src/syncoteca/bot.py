@@ -107,6 +107,9 @@ _PENDING_DATE_FIX: dict[int, dict] = {}
 # Pending label scrape confirmation {chat_id: {"label_id": str, "label_name": str, "analysis": dict}}
 _PENDING_LABEL_SCRAPE: dict[int, dict] = {}
 
+# /parse_label sent without args — next message is the label name
+_PENDING_LABEL_NAME: set[int] = set()
+
 # Last entity query used for a successful catalog lookup (chat_id → query text).
 # Set when catalog_ctx is non-empty; cleared after export. Prevents stale history
 # scan from picking up wrong artist on "да, выгрузи" follow-ups.
@@ -2255,7 +2258,7 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             return
         thinking = await update.message.reply_text(f"🗃️ Ковальски: ищу лейбл «{label_query}» в базе…")
         try:
-            from syncoteca.tools.label_scraper import find_label_in_db, analyze_label, is_running
+            from syncoteca.tools.label_scraper import find_label_in_db, analyze_label, find_sublabels, is_running
             if is_running():
                 await thinking.edit_text("⚠️ Ковальски: парсинг уже запущен. Сначала останови: «стоп парсинг».")
                 return
@@ -2268,32 +2271,55 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                 return
             label_id, label_name = found
             await thinking.edit_text(f"🗃️ Ковальски: нашёл «{label_name}». Анализирую каталог…")
-            analysis = await loop.run_in_executor(None, analyze_label, label_id)
+            analysis, sublabels = await asyncio.gather(
+                loop.run_in_executor(None, analyze_label, label_id),
+                loop.run_in_executor(None, find_sublabels, label_name),
+            )
             if not analysis:
                 await thinking.edit_text(f"❌ Ковальски: не удалось получить данные каталога для «{label_name}».")
                 return
             total_albums = analysis["album_count"]
-            remaining = analysis["remaining"]
-            already = analysis["already_done"]
-            est_tracks = analysis["estimated_tracks"]
             eta_s = analysis["eta_seconds"]
             eta_h = eta_s // 3600
             eta_m = (eta_s % 3600) // 60
             eta_str = f"~{eta_h}ч {eta_m}мин" if eta_h else f"~{eta_m} мин"
-            resume_note = f"\n⏩ Уже обработано: {already} альбомов (продолжу с остановки)." if already else ""
-            msg = (
-                f"🗃️ Ковальски: лейбл «{label_name}» (ID: {label_id})\n"
-                f"📀 Альбомов в каталоге: {total_albums}{resume_note}\n"
-                f"🎵 Осталось обработать: {remaining} альбомов (~{est_tracks} треков)\n"
-                f"⏱ Примерное время: {eta_str}\n\n"
-                f"Запускать парсинг? (да / нет)"
-            )
+
+            if sublabels:
+                # Multi-label choice flow
+                sub_names = [s["name"] for s in sublabels]
+                shown = sub_names[:10]
+                more = len(sub_names) - 10
+                subs_preview = ", ".join(shown) + (f" ...и ещё {more}" if more > 0 else "")
+                msg = (
+                    f"🗃️ Ковальски: вижу лейбл «{label_name}» — {total_albums} альбомов (~{eta_str})\n\n"
+                    f"📂 У него {len(sublabels)} саблейблов:\n{subs_preview}\n\n"
+                    f"Что парсить?\n"
+                    f"1️⃣ Только «{label_name}»\n"
+                    f"2️⃣ «{label_name}» + все {len(sublabels)} саблейблов\n"
+                    f"3️⃣ Только саблейблы (без основного)\n"
+                    f"Или назови конкретный саблейбл"
+                )
+                _PENDING_LABEL_SCRAPE[chat_id] = {
+                    "stage": "sublabel_choice",
+                    "label_id": label_id,
+                    "label_name": label_name,
+                    "analysis": analysis,
+                    "sublabels": sublabels,
+                }
+            else:
+                # Simple да/нет flow
+                msg = (
+                    f"🗃️ Ковальски: вижу лейбл «{label_name}» — {total_albums} альбомов (~{eta_str})\n\n"
+                    f"Запускать парсинг? (да / нет)"
+                )
+                _PENDING_LABEL_SCRAPE[chat_id] = {
+                    "stage": "confirm",
+                    "label_id": label_id,
+                    "label_name": label_name,
+                    "analysis": analysis,
+                    "sublabels": [],
+                }
             await thinking.edit_text(msg)
-            _PENDING_LABEL_SCRAPE[chat_id] = {
-                "label_id": label_id,
-                "label_name": label_name,
-                "analysis": analysis,
-            }
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка поиска лейбла: {e}")
 
@@ -2307,7 +2333,7 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         _PENDING_LABEL_SCRAPE.pop(chat_id, None)
 
 
-async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: str) -> None:
+async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: str, prefix: str = "") -> None:
     from syncoteca.tools.label_scraper import scrape_label
     import asyncio as _asyncio
     import time as _time
@@ -2315,7 +2341,7 @@ async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: s
     STATUS_INTERVAL_S = 1800  # send status every 30 min
 
     loop = _asyncio.get_event_loop()
-    progress_msg = await bot.send_message(chat_id, f"⏳ Парсинг «{label_name}»: получаю список альбомов…")
+    progress_msg = await bot.send_message(chat_id, f"⏳ {prefix}Парсинг «{label_name}»: получаю список альбомов…")
     _last_edit = [0.0]
     _last_status = [_time.monotonic()]
     _state = [{"done": 0, "total": 0, "added": 0, "last_info": ""}]
@@ -2381,6 +2407,17 @@ async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: s
     if cancelled:
         lines.append("💡 Для продолжения: «спарси лейбл» снова — начнёт с того места.")
     await bot.send_message(chat_id, "\n".join(lines))
+
+
+async def _run_multi_label_scrape_task(chat_id: int, bot, labels: list[tuple[str, str]]) -> None:
+    """Scrape multiple labels sequentially, sending a summary per label + grand total."""
+    grand_added = grand_skipped = grand_errors = 0
+    for idx, (label_id, label_name) in enumerate(labels, 1):
+        prefix = f"[{idx}/{len(labels)}] " if len(labels) > 1 else ""
+        await _run_label_scrape_task(chat_id, bot, label_id, label_name, prefix=prefix)
+        # _run_label_scrape_task sends its own summary — collect totals if multi
+    if len(labels) > 1:
+        await bot.send_message(chat_id, f"✅ Ковальски: все {len(labels)} лейблов обработаны.")
 
 
 async def _run_fix_dates_task(chat_id: int, bot, limit: int, only_null: bool) -> None:
@@ -2476,26 +2513,78 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
             else:
                 _PENDING_DATE_FIX.pop(chat_id_early, None)
 
+        # /parse_label sent without args — treat next message as label name
+        if chat_id_early in _PENDING_LABEL_NAME:
+            _PENDING_LABEL_NAME.discard(chat_id_early)
+            label_query = user_request.strip().strip('«»"\'')
+            await _run_kowalski_tool(update, "scrape_label", f"спарси лейбл {label_query}")
+            return
+
         # Pending label-scrape confirmation
         if chat_id_early in _PENDING_LABEL_SCRAPE:
+            pending = _PENDING_LABEL_SCRAPE[chat_id_early]
             lower_req = user_request.lower().strip(".,!? ")
-            _yes_words = {"да", "конечно", "давай", "ок", "окей", "угу", "ага", "yes", "подтверждаю", "запускай", "поехали"}
             _no_words = {"нет", "не надо", "отмена", "стоп", "cancel", "no", "отменить", "не сейчас"}
-            if lower_req in _yes_words or lower_req.startswith("да"):
-                pending = _PENDING_LABEL_SCRAPE.pop(chat_id_early)
-                await update.message.reply_text(
-                    f"🗃️ Ковальски: запускаю парсинг «{pending['label_name']}».\n"
-                    f"Прогресс — каждые 30 минут. Для остановки: «стоп парсинг»."
-                )
-                asyncio.create_task(_run_label_scrape_task(
-                    chat_id_early, update.get_bot(),
-                    pending["label_id"], pending["label_name"],
-                ))
-                return
-            elif lower_req in _no_words or any(w in lower_req for w in ("не надо", "не сейчас", "отмен")):
+            if lower_req in _no_words or any(w in lower_req for w in ("не надо", "не сейчас", "отмен")):
                 _PENDING_LABEL_SCRAPE.pop(chat_id_early, None)
                 await update.message.reply_text("🗃️ Ковальски: парсинг отменён.")
                 return
+
+            stage = pending.get("stage", "confirm")
+            sublabels = pending.get("sublabels", [])
+
+            if stage == "sublabel_choice":
+                # Parse user choice: 1 / 2 / 3 / sublabel name
+                labels_to_scrape: list[tuple[str, str]] = []
+                main_entry = (pending["label_id"], pending["label_name"])
+                sub_entries = [(s["id"], s["name"]) for s in sublabels]
+
+                if lower_req in ("1", "только основной", "только главный", "основной"):
+                    labels_to_scrape = [main_entry]
+                elif lower_req in ("2", "все", "всё", "все вместе", "оба", "всех", "все саблейблы", "с саблейблами"):
+                    labels_to_scrape = [main_entry] + sub_entries
+                elif lower_req in ("3", "только саблейблы", "только дочерние", "без основного"):
+                    labels_to_scrape = sub_entries
+                else:
+                    # Try to match sublabel by name
+                    matched = [s for s in sublabels if lower_req in s["name"].lower()]
+                    if matched:
+                        labels_to_scrape = [(s["id"], s["name"]) for s in matched]
+                    elif lower_req in ("да", "конечно", "давай", "ок", "окей", "поехали", "запускай"):
+                        labels_to_scrape = [main_entry] + sub_entries  # "да" = all
+                    else:
+                        # Not recognized — keep pending, re-ask
+                        subs_list = "\n".join(f"  • {s['name']}" for s in sublabels[:15])
+                        if len(sublabels) > 15:
+                            subs_list += f"\n  ...и ещё {len(sublabels) - 15}"
+                        await update.message.reply_text(
+                            f"🗃️ Не понял выбор. Ответь:\n"
+                            f"1 — только «{pending['label_name']}»\n"
+                            f"2 — основной + все {len(sublabels)} саблейблов\n"
+                            f"3 — только саблейблы\n"
+                            f"Или назови название саблейбла:\n{subs_list}"
+                        )
+                        return
+            else:
+                # Simple да/нет
+                _yes_words = {"да", "конечно", "давай", "ок", "окей", "угу", "ага", "yes", "подтверждаю", "запускай", "поехали"}
+                if lower_req not in _yes_words and not lower_req.startswith("да"):
+                    return  # not a yes — fall through to LLM
+                labels_to_scrape = [(pending["label_id"], pending["label_name"])]
+
+            _PENDING_LABEL_SCRAPE.pop(chat_id_early, None)
+            total_labels = len(labels_to_scrape)
+            names_preview = ", ".join(n for _, n in labels_to_scrape[:3])
+            if total_labels > 3:
+                names_preview += f" ...и ещё {total_labels - 3}"
+            await update.message.reply_text(
+                f"🗃️ Ковальски: запускаю парсинг {total_labels} лейбл(а/ов): {names_preview}\n"
+                f"Прогресс — каждые 30 минут. Для остановки: «стоп парсинг»."
+            )
+            asyncio.create_task(_run_multi_label_scrape_task(
+                chat_id_early, update.get_bot(), labels_to_scrape,
+            ))
+            return
 
         intent = _kowalski_detect_intent(user_request)
         if intent:
@@ -3273,16 +3362,14 @@ async def handle_parse_label(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ACTIVE_AGENT[chat_id] = "content_manager"
     _persist_active_agent(chat_id, "content_manager")
     if not label_query:
-        await update.message.reply_text(
-            "🗃️ Ковальски: укажи название лейбла.\n"
-            "Пример: /parse_label Sony Music"
-        )
+        _PENDING_LABEL_NAME.add(chat_id)
+        await update.message.reply_text("🗃️ Ковальски: напиши название лейбла:")
         return
     # Reuse the same handler logic via fake intent dispatch
     loop = asyncio.get_event_loop()
     thinking = await update.message.reply_text(f"🗃️ Ковальски: ищу лейбл «{label_query}» в базе…")
     try:
-        from syncoteca.tools.label_scraper import find_label_in_db, analyze_label, is_running
+        from syncoteca.tools.label_scraper import find_label_in_db, analyze_label, find_sublabels, is_running
         if is_running():
             await thinking.edit_text("⚠️ Ковальски: парсинг уже запущен. Сначала останови: /stop_label_parse")
             return
@@ -3295,32 +3382,51 @@ async def handle_parse_label(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         label_id, label_name = found
         await thinking.edit_text(f"🗃️ Ковальски: нашёл «{label_name}». Анализирую каталог…")
-        analysis = await loop.run_in_executor(None, analyze_label, label_id)
+        analysis, sublabels = await asyncio.gather(
+            loop.run_in_executor(None, analyze_label, label_id),
+            loop.run_in_executor(None, find_sublabels, label_name),
+        )
         if not analysis:
             await thinking.edit_text(f"❌ Не удалось получить данные каталога для «{label_name}».")
             return
         total_albums = analysis["album_count"]
-        remaining = analysis["remaining"]
-        already = analysis["already_done"]
-        est_tracks = analysis["estimated_tracks"]
         eta_s = analysis["eta_seconds"]
         eta_h = eta_s // 3600
         eta_m = (eta_s % 3600) // 60
         eta_str = f"~{eta_h}ч {eta_m}мин" if eta_h else f"~{eta_m} мин"
-        resume_note = f"\n⏩ Уже обработано: {already} альбомов (продолжу с остановки)." if already else ""
-        msg = (
-            f"🗃️ Ковальски: лейбл «{label_name}» (ID: {label_id})\n"
-            f"📀 Альбомов в каталоге: {total_albums}{resume_note}\n"
-            f"🎵 Осталось обработать: {remaining} альбомов (~{est_tracks} треков)\n"
-            f"⏱ Примерное время: {eta_str}\n\n"
-            f"Запускать парсинг? (да / нет)"
-        )
-        await thinking.edit_text(msg)
-        _PENDING_LABEL_SCRAPE[chat_id] = {
-            "label_id": label_id,
-            "label_name": label_name,
-            "analysis": analysis,
-        }
+        if sublabels:
+            sub_names = [s["name"] for s in sublabels]
+            shown = sub_names[:10]
+            more = len(sub_names) - 10
+            subs_preview = ", ".join(shown) + (f" ...и ещё {more}" if more > 0 else "")
+            msg = (
+                f"🗃️ Ковальски: вижу лейбл «{label_name}» — {total_albums} альбомов (~{eta_str})\n\n"
+                f"📂 У него {len(sublabels)} саблейблов:\n{subs_preview}\n\n"
+                f"Что парсить?\n"
+                f"1️⃣ Только «{label_name}»\n"
+                f"2️⃣ «{label_name}» + все {len(sublabels)} саблейблов\n"
+                f"3️⃣ Только саблейблы (без основного)\n"
+                f"Или назови конкретный саблейбл"
+            )
+            _PENDING_LABEL_SCRAPE[chat_id] = {
+                "stage": "sublabel_choice",
+                "label_id": label_id,
+                "label_name": label_name,
+                "analysis": analysis,
+                "sublabels": sublabels,
+            }
+        else:
+            msg = (
+                f"🗃️ Ковальски: вижу лейбл «{label_name}» — {total_albums} альбомов (~{eta_str})\n\n"
+                f"Запускать парсинг? (да / нет)"
+            )
+            _PENDING_LABEL_SCRAPE[chat_id] = {
+                "stage": "confirm",
+                "label_id": label_id,
+                "label_name": label_name,
+                "analysis": analysis,
+                "sublabels": [],
+            }
     except Exception as e:
         await thinking.edit_text(f"❌ Ошибка: {e}")
 

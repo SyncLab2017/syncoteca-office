@@ -102,6 +102,19 @@ def find_label_in_db(query: str) -> Optional[tuple[str, str]]:
     return None
 
 
+def find_sublabels(label_name: str) -> list[dict]:
+    """Return sublabels where parent = label_name. Each item: {id, name}."""
+    params = {
+        "select": "id,name",
+        "parent": f"eq.{label_name}",
+        "order": "name.asc",
+        "limit": "200",
+    }
+    r = httpx.get(f"{_sb_base()}/rest/v1/labels", headers=_sb_headers(), params=params, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
 def fetch_label_album_ids(label_id: str) -> list[str]:
     """Fetch all album IDs for a label via Yandex Music API (paginated)."""
     all_ids: list[str] = []
