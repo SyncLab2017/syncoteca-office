@@ -116,6 +116,10 @@ _PENDING_LABEL_NAME: set[int] = set()
 # scan from picking up wrong artist on "да, выгрузи" follow-ups.
 _LAST_CATALOG_ENTITY: dict[int, str] = {}
 
+# After Excel sent: {chat_id: {"xlsx_bytes": bytes, "filename": str, "subject": str}}
+# Waiting for user to confirm email send.
+_PENDING_EMAIL_EXPORT: dict[int, dict] = {}
+
 # Coordinator dialogue history
 COORDINATOR_SESSIONS: dict[int, list[dict]] = defaultdict(list)
 
@@ -1698,6 +1702,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     LICENSE_SESSIONS[chat_id] = []
     _PENDING_LABEL_NAME.discard(chat_id)
     _PENDING_LABEL_SCRAPE.pop(chat_id, None)
+    _PENDING_EMAIL_EXPORT.pop(chat_id, None)
+    _LAST_CATALOG_ENTITY.pop(chat_id, None)
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _clear_pending_label_name, chat_id)
     await update.message.reply_text(WELCOME, parse_mode="Markdown")
@@ -2192,6 +2198,51 @@ def _build_label_scrape_prompt(
     return msg, pending
 
 
+async def _send_excel_by_email(update: Update, xlsx_bytes: bytes, filename: str, subject: str) -> None:
+    """Send Excel file via SMTP to OWNER_EMAIL."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.base import MIMEBase
+    from email.mime.text import MIMEText
+    from email import encoders
+
+    smtp_host = os.getenv("EMAIL_SMTP_HOST", "")
+    smtp_user = os.getenv("EMAIL_SMTP_USER", "")
+    smtp_pass = os.getenv("EMAIL_SMTP_PASS", "")
+    smtp_port = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+    owner_email = os.getenv("OWNER_EMAIL", "denis@synclab.pro")
+
+    if not smtp_host or not smtp_user or not smtp_pass:
+        await update.message.reply_text(
+            "❌ EMAIL_SMTP_HOST / EMAIL_SMTP_USER / EMAIL_SMTP_PASS не настроены в env."
+        )
+        return
+
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = smtp_user
+        msg["To"] = owner_email
+        msg["Subject"] = f"Синкотека — {subject}"
+        msg.attach(MIMEText(f"Выгрузка каталога: {subject}", "plain", "utf-8"))
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(xlsx_bytes)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+        msg.attach(part)
+
+        loop = asyncio.get_event_loop()
+        def _smtp_send():
+            with smtplib.SMTP(smtp_host, smtp_port) as s:
+                s.starttls()
+                s.login(smtp_user, smtp_pass)
+                s.sendmail(smtp_user, owner_email, msg.as_string())
+
+        await loop.run_in_executor(None, _smtp_send)
+        await update.message.reply_text(f"✅ Отправлено на {owner_email}.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка отправки письма: {e}")
+
+
 async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
     """Execute a Kowalski catalog tool triggered by natural language."""
     import io
@@ -2206,7 +2257,6 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             logger.info(f"Kowalski export query resolved: {export_query!r}")
             xlsx_bytes, filename, count, tracks = await loop.run_in_executor(None, export_catalog, export_query)
 
-            # Record tool invocation in session history so context isn't lost
             filters = parse_export_query(export_query)
             yf = filters.get("year_from")
             yt = filters.get("year_to", yf)
@@ -2229,7 +2279,7 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                 )
                 return
             caption = build_export_caption(tracks, subject)
-            await thinking.edit_text(f"🗃️ Найдено {count} треков, отправляю…")
+            await thinking.delete()
             try:
                 await update.message.reply_document(
                     document=io.BytesIO(xlsx_bytes),
@@ -2238,10 +2288,12 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                     read_timeout=60,
                     write_timeout=60,
                 )
-                await thinking.delete()
             except Exception as tg_err:
                 logger.warning(f"Telegram file upload timeout (file likely delivered): {tg_err}")
-                await thinking.edit_text(f"🗃️ {count} треков → {filename} (файл отправлен)")
+            # Offer email after sending
+            owner_email = os.getenv("OWNER_EMAIL", "denis@synclab.pro")
+            _PENDING_EMAIL_EXPORT[chat_id] = {"xlsx_bytes": xlsx_bytes, "filename": filename, "subject": subject}
+            await update.message.reply_text(f"📧 Отправить на {owner_email}?")
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка экспорта: {e}")
 
@@ -2669,6 +2721,27 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                 chat_id_early, update.get_bot(), labels_to_scrape,
             ))
             return
+
+        # Email confirmation: pending after Excel was sent
+        _email_affirmations = {"да", "ок", "окей", "да!", "yes", "конечно", "давай", "отправляй", "отправь", "send"}
+        if chat_id_early in _PENDING_EMAIL_EXPORT:
+            _lower_req = user_request.lower().strip(".,!? ")
+            if _lower_req in _email_affirmations or "почт" in _lower_req or "email" in _lower_req or "отправ" in _lower_req:
+                _ep = _PENDING_EMAIL_EXPORT.pop(chat_id_early)
+                await _send_excel_by_email(update, _ep["xlsx_bytes"], _ep["filename"], _ep["subject"])
+                return
+            elif _lower_req in {"нет", "не надо", "не нужно", "no", "cancel", "отмена"}:
+                _PENDING_EMAIL_EXPORT.pop(chat_id_early, None)
+                await update.message.reply_text("🗃️ Ковальски: окей, без почты.")
+                return
+
+        # Affirmation after catalog summary → trigger export with cached entity
+        _export_affirmations = {"да", "ок", "окей", "да!", "yes", "конечно", "давай", "хорошо", "выгрузи", "выгружай", "выгрузку", "файл", "excel", "экселька"}
+        if chat_id_early in _LAST_CATALOG_ENTITY:
+            _lower_req = user_request.lower().strip(".,!? ")
+            if _lower_req in _export_affirmations or any(w in _lower_req for w in ("выгруз", "экспорт", "excel", "файл")):
+                await _run_kowalski_tool(update, "export", user_request)
+                return
 
         intent = _kowalski_detect_intent(user_request)
         if intent:
