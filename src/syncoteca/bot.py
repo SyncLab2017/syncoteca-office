@@ -3516,6 +3516,7 @@ async def handle_parse_label(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return await _deny(update)
     label_query = " ".join(context.args).strip() if context.args else ""
     chat_id = update.effective_chat.id
+    loop = asyncio.get_event_loop()
     ACTIVE_AGENT[chat_id] = "content_manager"
     _persist_active_agent(chat_id, "content_manager")
     if not label_query:
@@ -3523,8 +3524,6 @@ async def handle_parse_label(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await loop.run_in_executor(None, _set_pending_label_name, chat_id)
         await update.message.reply_text("🗃️ Ковальски: напиши название лейбла:")
         return
-    # Reuse the same handler logic via fake intent dispatch
-    loop = asyncio.get_event_loop()
     thinking = await update.message.reply_text(f"🗃️ Ковальски: ищу лейбл «{label_query}» в базе…")
     try:
         from syncoteca.tools.label_scraper import find_label_in_db, analyze_label, find_sublabels, is_running
