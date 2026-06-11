@@ -1911,6 +1911,13 @@ def _kowalski_detect_intent(text: str) -> str | None:
         return "export_anomalies"
     if "последн" in lower and any(w in lower for w in ("трек", "добав", "загруз", "по id")):
         return "recent"
+    if any(w in lower for w in (
+        "спарси лейбл", "парсинг лейбла", "загрузи каталог лейбла", "парсинг каталога",
+        "скрапинг лейбла", "скрапить лейбл", "скрапить каталог",
+        "загрузи лейбл", "скачай лейбл", "скачай каталог лейбла",
+        "спарсить лейбл", "спарсить каталог", "запусти парсинг",
+    )):
+        return "scrape_label"
     # Status queries about enrichment must NOT trigger a new enrich run
     if re.search(r'\b(закончил|завершил|уже\s+закончил|ты\s+закончил|готово)\b', lower) and \
        any(w in lower for w in ("обогащени", "обогат", "обогащ", "enrich")):
@@ -2210,6 +2217,84 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         history.append({"role": "assistant", "content": reply})
         DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
         asyncio.create_task(_run_enrich_task(chat_id, update.get_bot(), limit))
+
+    elif intent == "scrape_label":
+        # Extract label name from text — strip trigger phrases
+        label_query = re.sub(
+            r'(спарси\s+лейбл|парсинг\s+лейбла?|загрузи\s+каталог\s+лейбла?|загрузи\s+лейбл|'
+            r'скачай\s+каталог\s+лейбла?|скачай\s+лейбл|спарсить\s+лейбл|спарсить\s+каталог|'
+            r'скрапинг\s+лейбла?|скрапить\s+(лейбл|каталог)|запусти\s+парсинг\s+(лейбла?|каталога)?)',
+            '', text, flags=re.IGNORECASE,
+        ).strip().strip('.,!?')
+        if not label_query:
+            await update.message.reply_text("🗃️ Ковальски: укажи название лейбла. Например: «спарси лейбл Sony Music»")
+            return
+        thinking = await update.message.reply_text(f"🗃️ Ковальски: ищу лейбл «{label_query}» в базе…")
+        try:
+            from syncoteca.tools.label_scraper import find_label_in_db
+            result = await loop.run_in_executor(None, find_label_in_db, label_query)
+            if not result:
+                await thinking.edit_text(
+                    f"🗃️ Ковальски: лейбл «{label_query}» не найден в таблице labels.\n"
+                    f"Проверь название или добавь лейбл в базу."
+                )
+                return
+            label_id, label_name = result
+            await thinking.edit_text(
+                f"🗃️ Ковальски: найден лейбл «{label_name}» (ID: {label_id}).\n"
+                f"Запускаю парсинг каталога — буду присылать прогресс по альбомам."
+            )
+            asyncio.create_task(_run_label_scrape_task(chat_id, update.get_bot(), label_id, label_name))
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка поиска лейбла: {e}")
+
+
+async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: str) -> None:
+    from syncoteca.tools.label_scraper import scrape_label
+    import asyncio as _asyncio
+    import time as _time
+
+    loop = _asyncio.get_event_loop()
+    progress_msg = await bot.send_message(chat_id, f"⏳ Парсинг «{label_name}»: получаю список альбомов…")
+    _last_edit = [0.0]
+
+    def _progress(done: int, total: int, info: str) -> None:
+        now = _time.monotonic()
+        if now - _last_edit[0] < 4.0:
+            return
+        _last_edit[0] = now
+        text = f"⏳ «{label_name}»: {done}/{total} альбомов\n✅ {info}"
+        fut = _asyncio.run_coroutine_threadsafe(progress_msg.edit_text(text), loop)
+        try:
+            fut.result(timeout=5)
+        except Exception:
+            pass
+
+    try:
+        result = await loop.run_in_executor(None, lambda: scrape_label(label_id, progress_cb=_progress))
+    except Exception as e:
+        await bot.send_message(chat_id, f"❌ Ковальски: ошибка парсинга лейбла — {e}")
+        return
+
+    try:
+        await progress_msg.delete()
+    except Exception:
+        pass
+
+    if result.get("error") == "already_running":
+        await bot.send_message(chat_id, "⚠️ Ковальски: парсинг уже запущен, дождись завершения.")
+        return
+
+    lines = [
+        f"🗃️ Ковальски: парсинг «{result.get('label_name') or label_name}» завершён.",
+        f"Альбомов обработано: {result.get('albums_done', 0)} из {result.get('albums_total', 0)}.",
+        f"✅ Добавлено треков: {result.get('added', 0)}",
+    ]
+    if result.get("skipped"):
+        lines.append(f"⏭ Пропущено (уже есть): {result['skipped']}")
+    if result.get("errors"):
+        lines.append(f"❌ Ошибок: {result['errors']}")
+    await bot.send_message(chat_id, "\n".join(lines))
 
 
 async def _run_fix_dates_task(chat_id: int, bot, limit: int, only_null: bool) -> None:
