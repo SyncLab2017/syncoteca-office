@@ -2203,7 +2203,7 @@ def _build_label_scrape_prompt(
     return msg, pending
 
 
-async def _send_excel_by_email(update: Update, query: str, subject: str) -> None:
+async def _send_excel_by_email(update: Update, query: str, subject: str, to_override: Optional[str] = None) -> None:
     """Re-fetch Excel from Supabase and send via Resend API (primary) or SMTP (fallback)."""
     import base64
     import smtplib
@@ -2212,7 +2212,7 @@ async def _send_excel_by_email(update: Update, query: str, subject: str) -> None
     from email.mime.text import MIMEText
     from email import encoders
 
-    owner_email = os.getenv("OWNER_EMAIL", "denis@synclab.pro")
+    owner_email = to_override or os.getenv("OWNER_EMAIL", "denis@synclab.pro")
     resend_key = os.getenv("RESEND_API_KEY", "")
     smtp_host = os.getenv("EMAIL_SMTP_HOST", "")
     smtp_user = os.getenv("EMAIL_SMTP_USER", "")
@@ -2754,12 +2754,28 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
             return
 
         # Email confirmation: pending after Excel was sent
-        _email_affirmations = {"да", "ок", "окей", "да!", "yes", "конечно", "давай", "отправляй", "отправь", "send"}
+        _email_affirmations = {
+            "да", "ок", "окей", "да!", "yes", "конечно", "давай", "отправляй", "отправь", "send",
+            "вышли", "высылай", "валяй", "действуй", "шли", "пошли", "хорошо", "отправь-ка",
+            "давай отправляй", "давай вышли", "пусть идёт", "пусть идет",
+        }
+        _email_send_substrings = ("почт", "email", "отправ", "направ", "вышл", "высыл", "валяй", "действуй")
         if chat_id_early in _PENDING_EMAIL_EXPORT:
             _lower_req = user_request.lower().strip(".,!? ")
-            if _lower_req in _email_affirmations or "почт" in _lower_req or "email" in _lower_req or "отправ" in _lower_req or "направ" in _lower_req:
+            # Check exact match, OR any send-keyword anywhere in message, OR email address present
+            _has_custom_email = re.search(r'\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b', user_request, re.IGNORECASE)
+            _is_confirm = (
+                _lower_req in _email_affirmations
+                or any(w in _lower_req for w in _email_send_substrings)
+                or _has_custom_email
+                # "да, вышли" / "да пошли" — "да" as first word
+                or _lower_req.split(",")[0].strip() in _email_affirmations
+                or _lower_req.split()[0] in _email_affirmations
+            )
+            if _is_confirm:
                 _ep = _PENDING_EMAIL_EXPORT.pop(chat_id_early)
-                await _send_excel_by_email(update, _ep["query"], _ep["subject"])
+                _custom_to = _has_custom_email.group(0) if _has_custom_email else None
+                await _send_excel_by_email(update, _ep["query"], _ep["subject"], to_override=_custom_to)
                 return
             elif _lower_req in {"нет", "не надо", "не нужно", "no", "cancel", "отмена"}:
                 _PENDING_EMAIL_EXPORT.pop(chat_id_early, None)

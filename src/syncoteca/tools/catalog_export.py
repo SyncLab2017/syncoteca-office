@@ -170,20 +170,38 @@ def parse_export_query(text: str) -> dict:
     elif any(w in lower for w in ("только иностранн", "зарубежн", "не русск", "английск")):
         filters["language"] = "foreign"
 
-    # Year range: "1975-1980" / "1975–1980"
-    # Do NOT return early — continue to extract artist/label from the same query
-    # so "Барыкин 1990-2000" gets both artist AND year_from/year_to.
-    m = re.search(r"\b((?:19|20)\d{2})\s*[-–—]\s*((?:19|20)\d{2})\b", text)
+    # Year range detection — try most specific patterns first
+    _YY = r"((?:19|20)\d{2})"
+    _year_range_matched = False
+
+    # Russian preposition ranges: "с 1991 по 1994", "за период 1991 по 1994 год",
+    # "от 1991 до 1994", "период 1991 по 1994", "с 1991 года по 1994"
+    _ru_range_re = re.compile(
+        r"(?:за\s+период\s+|период\s+|с\s+|от\s+)" + _YY +
+        r"(?:\s+год[ау]?)?\s+(?:по|до)\s+" + _YY,
+        re.IGNORECASE,
+    )
+    m = _ru_range_re.search(text)
     if m:
         filters["year_from"] = int(m.group(1))
         filters["year_to"] = int(m.group(2))
-        # Strip year range from text so it doesn't pollute artist detection below
         text = (text[:m.start()] + text[m.end():]).strip()
         lower = text.lower()
+        _year_range_matched = True
+
+    # Hyphenated range: "1975-1980" / "1975–1980"
+    if not _year_range_matched:
+        m = re.search(r"\b" + _YY + r"\s*[-–—]\s*" + _YY + r"\b", text)
+        if m:
+            filters["year_from"] = int(m.group(1))
+            filters["year_to"] = int(m.group(2))
+            text = (text[:m.start()] + text[m.end():]).strip()
+            lower = text.lower()
+            _year_range_matched = True
 
     # Single year (only if no range already found)
-    if not filters.get("year_from"):
-        m = re.search(r"\b((?:19|20)\d{2})\b", text)
+    if not _year_range_matched and not filters.get("year_from"):
+        m = re.search(r"\b" + _YY + r"\b", text)
         if m:
             filters["year_from"] = int(m.group(1))
             filters["year_to"] = int(m.group(1))
