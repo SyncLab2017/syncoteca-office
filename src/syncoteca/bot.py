@@ -170,6 +170,64 @@ def _restore_active_agent(chat_id: int) -> str | None:
     return None
 
 
+def _set_pending_label_name(chat_id: int) -> None:
+    """Persist 'waiting for label name' state to Supabase."""
+    import httpx
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not base or not key:
+        return
+    try:
+        httpx.post(
+            f"{base}/rest/v1/agent_sessions",
+            headers={"apikey": key, "Authorization": f"Bearer {key}",
+                     "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"},
+            json={"session_id": f"pending_label_{chat_id}", "agent_name": "content_manager",
+                  "messages": [], "task_context": {"pending_label_name": True, "chat_id": chat_id}},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
+def _clear_pending_label_name(chat_id: int) -> None:
+    """Remove 'waiting for label name' state from Supabase."""
+    import httpx
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not base or not key:
+        return
+    try:
+        httpx.delete(
+            f"{base}/rest/v1/agent_sessions",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            params={"session_id": f"eq.pending_label_{chat_id}"},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
+def _check_pending_label_name(chat_id: int) -> bool:
+    """Check if 'waiting for label name' state exists in Supabase."""
+    import httpx
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not base or not key:
+        return False
+    try:
+        resp = httpx.get(
+            f"{base}/rest/v1/agent_sessions",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            params={"session_id": f"eq.pending_label_{chat_id}", "limit": "1"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        return bool(resp.json())
+    except Exception:
+        return False
+
+
 def _clear_active_agent(chat_id: int) -> None:
     """Remove sticky agent from Supabase."""
     import httpx
@@ -1637,6 +1695,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _clear_active_agent(chat_id)
     TEACH_SESSIONS.pop(chat_id, None)
     LICENSE_SESSIONS[chat_id] = []
+    _PENDING_LABEL_NAME.discard(chat_id)
+    _PENDING_LABEL_SCRAPE.pop(chat_id, None)
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _clear_pending_label_name, chat_id)
     await update.message.reply_text(WELCOME, parse_mode="Markdown")
 
 
@@ -2514,8 +2576,15 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                 _PENDING_DATE_FIX.pop(chat_id_early, None)
 
         # /parse_label sent without args — treat next message as label name
-        if chat_id_early in _PENDING_LABEL_NAME:
+        # Check both in-memory (fast) and Supabase (survives Railway restart)
+        _is_pending_label = chat_id_early in _PENDING_LABEL_NAME
+        if not _is_pending_label:
+            loop_early = asyncio.get_event_loop()
+            _is_pending_label = await loop_early.run_in_executor(None, _check_pending_label_name, chat_id_early)
+        if _is_pending_label:
             _PENDING_LABEL_NAME.discard(chat_id_early)
+            loop_early = asyncio.get_event_loop()
+            await loop_early.run_in_executor(None, _clear_pending_label_name, chat_id_early)
             label_query = user_request.strip().strip('«»"\'')
             await _run_kowalski_tool(update, "scrape_label", f"спарси лейбл {label_query}")
             return
@@ -3363,6 +3432,7 @@ async def handle_parse_label(update: Update, context: ContextTypes.DEFAULT_TYPE)
     _persist_active_agent(chat_id, "content_manager")
     if not label_query:
         _PENDING_LABEL_NAME.add(chat_id)
+        await loop.run_in_executor(None, _set_pending_label_name, chat_id)
         await update.message.reply_text("🗃️ Ковальски: напиши название лейбла:")
         return
     # Reuse the same handler logic via fake intent dispatch
