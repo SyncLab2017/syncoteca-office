@@ -227,6 +227,10 @@ def parse_export_query(text: str) -> dict:
                 r').*$',
                 '', artist, flags=re.IGNORECASE
             ).strip()
+            # Discard if starts with a preposition — year-range context debris
+            # e.g. "репертуар в периоде 1980-1989 годов" → after year strip → "в периоде  годов"
+            if artist and re.match(r'^(?:в|на|из|за|с|по|до|от|у|при|под|над|для|со)\s', artist, re.IGNORECASE):
+                artist = ""
             if artist:
                 filters["artist"] = artist
 
@@ -249,8 +253,12 @@ def parse_export_query(text: str) -> dict:
                 filters["label"] = alias_val
                 break
 
-    # Fallback: bare words → artist only when no entity filter found yet
-    if not filters.get("artist") and not filters.get("label") and not filters.get("genre"):
+    # Fallback: bare words → artist only when no entity filter found yet.
+    # Skip when year range already found AND text is long — avoids extracting
+    # conversational garbage like "Ковальский табличку" from "репертуар в периоде 1980-1989 годов...".
+    _year_found = bool(filters.get("year_from"))
+    _text_long = len(text.split()) > 5
+    if not filters.get("artist") and not filters.get("label") and not filters.get("genre") and not (_year_found and _text_long):
         stop = {
             "выгрузи", "выгрузим", "выгрузите", "выгружаем", "выгружаете", "выгружать",
             "выгрузка", "выгрузку", "выгружай", "выгрузить",
@@ -282,6 +290,9 @@ def parse_export_query(text: str) -> dict:
             "загруженные", "загруженных", "загрузили", "загружен",
             "вышедшие", "вышедших", "вышли", "вышел", "вышедшим",
             "релиз", "релизе", "релиза", "release",
+            # Year-period context words — not artist names
+            "периоде", "периода", "периоду", "периодом", "периодах",
+            "годов", "годах", "годами", "лет", "летних", "летний",
             # Nationality/descriptor adjectives — not artist names
             "русские", "русская", "русский", "русского", "русских", "русским", "русскую",
             "советские", "советская", "советский", "советского", "советских", "советским",
