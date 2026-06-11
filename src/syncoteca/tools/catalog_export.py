@@ -290,6 +290,10 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
     if filters.get("label"):
         lb = filters["label"].replace("*", "")
         conditions.append(f"label.ilike.*{lb}*")
+        # Normalize spaces around & so "S & P Digital" matches "S&P Digital"
+        lb_compact = re.sub(r'\s*&\s*', '&', lb)
+        if lb_compact != lb:
+            conditions.append(f"label.ilike.*{lb_compact}*")
 
     if filters.get("genre"):
         g = filters["genre"].replace("*", "")
@@ -332,6 +336,18 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
         ]
 
     return rows
+
+
+def fetch_recent_tracks(limit: int = 50) -> list[dict]:
+    """Return the most recently added tracks ordered by id DESC."""
+    params = {
+        "select": "id,title,artist,album,label,music_author,lyrics_author,release_date,genre_1,link",
+        "order": "id.desc",
+        "limit": str(min(limit, 200)),
+    }
+    r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=45)
+    r.raise_for_status()
+    return r.json()
 
 
 def build_excel(tracks: list[dict], title: str = "Каталог SYNC LAB") -> bytes:
@@ -446,6 +462,16 @@ def export_catalog(query_text: str) -> tuple[bytes, str, int, list[dict]]:
     """
     filters = parse_export_query(query_text)
     tracks = fetch_tracks(filters)
+
+    # Bare-word fallback: artist search returned 0 → retry same term as label.
+    # Handles "выгрузи Warner" / "выгрузи monolit" where no "лейбл" keyword given.
+    if not tracks and filters.get("artist") and not filters.get("label") and not filters.get("genre"):
+        label_filters = {k: v for k, v in filters.items() if k != "artist"}
+        label_filters["label"] = filters["artist"]
+        retry = fetch_tracks(label_filters)
+        if retry:
+            tracks = retry
+            filters = label_filters
 
     # Build a human-readable filename
     parts = []

@@ -1909,6 +1909,8 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "export_anomalies", "выгрузи аномали", "excel аномали", "список аномали",
     )):
         return "export_anomalies"
+    if "последн" in lower and any(w in lower for w in ("трек", "добав", "загруз", "по id")):
+        return "recent"
     if any(w in lower for w in (
         "обнови базу", "обогати треки", "обогати базу", "заполни пустые", "пустые треки",
         "обработай треки", "треки без данных", "запусти обогащение", "обновить базу",
@@ -2098,6 +2100,36 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                 await thinking.edit_text(f"🗃️ {count} треков → {filename} (файл отправлен)")
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка экспорта: {e}")
+
+    elif intent == "recent":
+        m = re.search(r'\b(\d{1,3})\b', text)
+        limit = min(int(m.group(1)), 200) if m else 50
+        thinking = await update.message.reply_text(f"🗃️ Ковальски: ищу последние {limit} треков…")
+        try:
+            from syncoteca.tools.catalog_export import fetch_recent_tracks, build_excel, build_export_caption
+            tracks = await loop.run_in_executor(None, fetch_recent_tracks, limit)
+            if not tracks:
+                await thinking.edit_text("🗃️ Ковальски: треков не найдено.")
+                return
+            lines = [f"🗃️ Последние {len(tracks)} треков (по ID):"]
+            for i, t in enumerate(tracks[:15], 1):
+                a = t.get("artist") or "?"
+                tit = t.get("title") or "?"
+                lines.append(f"{i}. {a} — {tit}")
+            if len(tracks) > 15:
+                lines.append(f"…ещё {len(tracks) - 15} в Excel.")
+            await thinking.edit_text("\n".join(lines))
+            xlsx = await loop.run_in_executor(None, build_excel, tracks, f"Последние {len(tracks)} треков")
+            caption = build_export_caption(tracks, f"Последние {len(tracks)} треков")
+            await update.message.reply_document(
+                document=io.BytesIO(xlsx),
+                filename=f"SYNCLAB_recent_{len(tracks)}.xlsx",
+                caption=caption,
+                read_timeout=60,
+                write_timeout=60,
+            )
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка: {e}")
 
     elif intent == "fix_dates":
         import re as _re
