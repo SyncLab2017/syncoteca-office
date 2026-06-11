@@ -1,4 +1,5 @@
 """Excel export of Supabase tracks catalog with natural-language filter parsing."""
+import datetime
 import io
 import os
 import re
@@ -84,6 +85,74 @@ def parse_export_query(text: str) -> dict:
     """
     filters: dict = {}
     lower = text.lower()
+
+    # === Specific date detection (must run before year parsing) ===
+    # Detect "вчера", "сегодня", "DD.MM.YYYY", "DD.MM", Russian months
+    # Sets filters["date_added"] (created_at) or filters["release_day"] (release_date)
+    _today = datetime.date.today()
+    _is_release_ctx = any(w in lower for w in ("вышл", "релиз", "вышедш", "release", "выход"))
+    _detected_date: datetime.date | None = None
+
+    if "вчера" in lower or "yesterday" in lower:
+        _detected_date = _today - datetime.timedelta(days=1)
+    elif "позавчера" in lower:
+        _detected_date = _today - datetime.timedelta(days=2)
+    elif "сегодня" in lower or "today" in lower:
+        _detected_date = _today
+    else:
+        # DD.MM.YYYY
+        _dm = re.search(r'\b(\d{1,2})\.(\d{2})\.(\d{4})\b', text)
+        if _dm:
+            try:
+                _detected_date = datetime.date(int(_dm.group(3)), int(_dm.group(2)), int(_dm.group(1)))
+                text = (text[:_dm.start()] + text[_dm.end():]).strip()
+                lower = text.lower()
+            except ValueError:
+                pass
+        # YYYY-MM-DD (ISO, for round-trip re-parse from cached filters)
+        if not _detected_date:
+            _dm = re.search(r'\b(\d{4})-(\d{2})-(\d{2})\b', text)
+            if _dm:
+                try:
+                    _detected_date = datetime.date(int(_dm.group(1)), int(_dm.group(2)), int(_dm.group(3)))
+                    text = (text[:_dm.start()] + text[_dm.end():]).strip()
+                    lower = text.lower()
+                except ValueError:
+                    pass
+        # DD.MM (current year)
+        if not _detected_date:
+            _dm = re.search(r'\b(\d{1,2})\.(\d{2})\b(?!\.\d)', text)
+            if _dm:
+                _dv, _mv = int(_dm.group(1)), int(_dm.group(2))
+                if 1 <= _dv <= 31 and 1 <= _mv <= 12:
+                    try:
+                        _detected_date = datetime.date(_today.year, _mv, _dv)
+                        text = (text[:_dm.start()] + text[_dm.end():]).strip()
+                        lower = text.lower()
+                    except ValueError:
+                        pass
+        # Russian month names: "10 июня", "10 июня 2026"
+        if not _detected_date:
+            _RU_MONTHS = [
+                ("январ", 1), ("феврал", 2), ("март", 3), ("апрел", 4),
+                (r"ма[йя]", 5), ("июн", 6), ("июл", 7), ("август", 8),
+                ("сентябр", 9), ("октябр", 10), ("ноябр", 11), ("декабр", 12),
+            ]
+            for _mp, _mn in _RU_MONTHS:
+                _dm = re.search(r'(\d{1,2})\s+' + _mp + r'\w*(?:\s+(\d{4}))?', lower)
+                if _dm:
+                    try:
+                        _yr = int(_dm.group(2)) if _dm.group(2) else _today.year
+                        _detected_date = datetime.date(_yr, _mn, int(_dm.group(1)))
+                        text = (text[:_dm.start()] + text[_dm.end():]).strip()
+                        lower = text.lower()
+                        break
+                    except ValueError:
+                        pass
+
+    if _detected_date:
+        _date_key = "release_day" if _is_release_ctx else "date_added"
+        filters[_date_key] = _detected_date.isoformat()
 
     # Handle CLI-style flags: --label="X" / --artist="X" (user copied bot suggestion)
     m = re.search(r'--label=["\']?([^"\']+)["\']?', text, re.IGNORECASE)
@@ -207,6 +276,12 @@ def parse_export_query(text: str) -> dict:
             "данные", "данных", "данным", "данного",
             "подбери", "подобрать", "подберёт",
             "песни", "песня", "песню",
+            # Date/time words — not artist names
+            "вчера", "сегодня", "позавчера", "завтра",
+            "добавленные", "добавленных", "добавленным", "добавили", "добавлен",
+            "загруженные", "загруженных", "загрузили", "загружен",
+            "вышедшие", "вышедших", "вышли", "вышел", "вышедшим",
+            "релиз", "релизе", "релиза", "release",
             # Nationality/descriptor adjectives — not artist names
             "русские", "русская", "русский", "русского", "русских", "русским", "русскую",
             "советские", "советская", "советский", "советского", "советских", "советским",
@@ -299,6 +374,14 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
         g = filters["genre"].replace("*", "")
         conditions.append(f"genre_1.ilike.*{g}*")
 
+    # Release-day filter: release_date contains DD.MM.YYYY string
+    if filters.get("release_day"):
+        try:
+            rd = datetime.date.fromisoformat(filters["release_day"])
+            conditions.append(f'release_date.ilike.*{rd.strftime("%d.%m.%Y")}*')
+        except ValueError:
+            pass
+
     # Year conditions — push into Supabase query directly so Latin-first
     # ORDER BY artist doesn't hide Cyrillic artists behind the row limit.
     # Without this, year-only queries post-filter on 5000 Latin-sorted rows
@@ -321,7 +404,18 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
         # lost to Latin-first ORDER BY cutting off rows before limit.
         params["or"] = f"({','.join(year_conds)})"
 
-    r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=45)
+    # Date-added filter: created_at range (requires duplicate param keys → list of tuples)
+    date_params: list[tuple] = []
+    if filters.get("date_added"):
+        try:
+            d = datetime.date.fromisoformat(filters["date_added"])
+            next_d = d + datetime.timedelta(days=1)
+            date_params = [("created_at", f"gte.{d.isoformat()}"), ("created_at", f"lt.{next_d.isoformat()}")]
+        except ValueError:
+            pass
+
+    params_list = list(params.items()) + date_params
+    r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params_list, timeout=45)
     r.raise_for_status()
     rows = r.json()
 
@@ -484,6 +578,10 @@ def export_catalog(query_text: str) -> tuple[bytes, str, int, list[dict]]:
         yf = filters["year_from"]
         yt = filters.get("year_to", yf)
         parts.append(str(yf) if yf == yt else f"{yf}-{yt}")
+    if filters.get("date_added"):
+        parts.append(f"добавлено_{filters['date_added']}")
+    if filters.get("release_day"):
+        parts.append(f"релиз_{filters['release_day']}")
     suffix = "_".join(parts).replace(" ", "_") or "catalog"
     filename = f"SYNCLAB_{suffix}.xlsx"
 

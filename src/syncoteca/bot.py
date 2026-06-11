@@ -1973,7 +1973,7 @@ _ARTIST_FILLER = {
 
 def _export_filters_are_clean(filters: dict) -> bool:
     """Return True if parsed filters look like a genuine artist/year/label (not conversational noise)."""
-    if filters.get("year_from") or filters.get("label") or filters.get("genre"):
+    if filters.get("year_from") or filters.get("label") or filters.get("genre") or filters.get("date_added") or filters.get("release_day"):
         return True
     artist = filters.get("artist", "")
     if not artist:
@@ -2016,6 +2016,12 @@ def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
                 if year_to and year_to != year_from:
                     return f"{year_from}-{year_to}"
                 return str(year_from)
+            date_added = cached.get("date_added")
+            if date_added:
+                return date_added  # ISO YYYY-MM-DD, re-parsed by parse_export_query
+            release_day = cached.get("release_day")
+            if release_day:
+                return f"релиз {release_day}"
         elif isinstance(cached, str):
             cached_filters = parse_export_query(cached)
             if _export_filters_are_clean(cached_filters):
@@ -2070,7 +2076,10 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             yf = filters.get("year_from")
             yt = filters.get("year_to", yf)
             year_subject = f"{yf}-{yt}" if yf and yt and yf != yt else (str(yf) if yf else None)
-            subject = filters.get("artist") or filters.get("label") or year_subject or export_query[:40]
+            _da = filters.get("date_added")
+            _rd = filters.get("release_day")
+            date_subject = (f"добавлено {_da}" if _da else None) or (f"релиз {_rd}" if _rd else None)
+            subject = filters.get("artist") or filters.get("label") or year_subject or date_subject or export_query[:40]
             history = DIRECT_SESSIONS["content_manager"][chat_id]
             history.append({"role": "user", "content": text})
             history.append({"role": "assistant", "content": f"[Выгрузка: {subject} — {count} треков → {filename}]"})
