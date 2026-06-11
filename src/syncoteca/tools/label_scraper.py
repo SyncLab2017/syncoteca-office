@@ -295,7 +295,7 @@ def scrape_label(
                 pass
 
             if progress_cb:
-                info = f"{album_artists} — {album_title} ({track_num} тр.)"
+                info = f"{album_artists} — {album_title} ({track_num} тр.) | +{added} треков всего"
                 progress_cb(ai + 1, len(to_process), info)
 
         return {

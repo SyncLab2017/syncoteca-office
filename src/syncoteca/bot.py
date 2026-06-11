@@ -2400,35 +2400,40 @@ async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: s
     import asyncio as _asyncio
     import time as _time
 
-    STATUS_INTERVAL_S = 1800  # send status every 30 min
+    STATUS_INTERVAL_S = 120  # send status summary every 2 min
 
     loop = _asyncio.get_event_loop()
     progress_msg = await bot.send_message(chat_id, f"⏳ {prefix}Парсинг «{label_name}»: получаю список альбомов…")
     _last_edit = [0.0]
     _last_status = [_time.monotonic()]
-    _state = [{"done": 0, "total": 0, "added": 0, "last_info": ""}]
+    _counters = [{"added": 0, "skipped": 0}]
 
     def _progress(done: int, total: int, info: str) -> None:
         now = _time.monotonic()
-        _state[0].update({"done": done, "total": total, "last_info": info})
-        # Edit live progress message
-        if now - _last_edit[0] >= 4.0:
+        # Edit progress message on every album (each album already takes 5s+, safe for Telegram)
+        if now - _last_edit[0] >= 4.5:
             _last_edit[0] = now
-            text = f"⏳ «{label_name}»: {done}/{total} альбомов\n✅ {info}"
+            pct = int(done / total * 100) if total else 0
+            text = (
+                f"⏳ {prefix}«{label_name}»: [{done}/{total}] {pct}%\n"
+                f"✅ {info}"
+            )
             fut = _asyncio.run_coroutine_threadsafe(progress_msg.edit_text(text), loop)
             try:
                 fut.result(timeout=5)
             except Exception:
                 pass
-        # Send 30-min status summary as new message
+        # Send status summary every 2 minutes as new message
         if now - _last_status[0] >= STATUS_INTERVAL_S:
             _last_status[0] = now
             pct = int(done / total * 100) if total else 0
+            remaining = total - done
+            eta_min = int(remaining * 6.5 / 60)
             status_text = (
-                f"📊 Ковальски: статус парсинга «{label_name}»\n"
-                f"Прогресс: {done}/{total} альбомов ({pct}%)\n"
+                f"📊 «{label_name}»: [{done}/{total}] {pct}%\n"
+                f"⏱ Осталось ~{eta_min} мин\n"
                 f"Последний: {info}\n"
-                f"Для остановки: «стоп парсинг»"
+                f"«стоп парсинг» — для остановки"
             )
             fut2 = _asyncio.run_coroutine_threadsafe(bot.send_message(chat_id, status_text), loop)
             try:
