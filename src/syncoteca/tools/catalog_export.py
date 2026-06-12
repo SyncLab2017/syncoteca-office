@@ -303,7 +303,7 @@ def parse_export_query(text: str) -> dict:
     # Skip when year range already found AND text is long — avoids extracting
     # conversational garbage like "Ковальский табличку" from "репертуар в периоде 1980-1989 годов...".
     _year_found = bool(filters.get("year_from"))
-    _text_long = len(text.split()) > 5
+    _text_long = len(text.split()) >= 3  # skip fallback when year found + 3+ words remain
     if not filters.get("artist") and not filters.get("label") and not filters.get("genre") and not (_year_found and _text_long):
         stop = {
             "выгрузи", "выгрузим", "выгрузите", "выгружаем", "выгружаете", "выгружать",
@@ -349,6 +349,9 @@ def parse_export_query(text: str) -> dict:
             "старые", "старая", "старый", "старых",
             "новые", "новая", "новый", "новых",
             "только", "лишь", "исключительно",
+            "интервал", "интервале", "интервала", "интервалу", "интервалом",
+            "диапазон", "диапазоне", "диапазона", "диапазону",
+            "промежутке", "промежуток", "промежутка",
             "знаешь", "знаете", "имеется", "имеются",
             "наш", "наша", "наше", "наши", "нашем", "нашей",
             "ты", "вы", "он", "она", "они", "я", "мы",
