@@ -40,6 +40,7 @@ def get_tracks_batch(
     only_null: bool = True,
     after_id: int = 0,
     label: Optional[str] = None,
+    artist: Optional[str] = None,
     date_from: Optional[str] = None,
 ) -> list[dict]:
     """Return up to `limit` tracks to process from Supabase.
@@ -47,6 +48,7 @@ def get_tracks_batch(
     only_null=True  → WHERE release_date IS NULL  (unprocessed tracks)
     only_null=False → all tracks, id > after_id  (full re-verification)
     label           → filter by label name (ilike)
+    artist          → filter by artist name (ilike)
     date_from       → filter by created_at >= YYYY-MM-DD
     """
     params: dict = {
@@ -60,6 +62,8 @@ def get_tracks_batch(
         params["id"] = f"gt.{after_id}"
     if label:
         params["label"] = f"ilike.*{label}*"
+    if artist:
+        params["artist"] = f"ilike.*{artist}*"
     if date_from:
         params["created_at"] = f"gte.{date_from}T00:00:00"
 
@@ -181,6 +185,7 @@ async def run_date_fix(
     only_null: bool = True,
     after_id: int = 0,
     label: Optional[str] = None,
+    artist: Optional[str] = None,
     date_from: Optional[str] = None,
 ) -> None:
     """Background asyncio task: fix Discogs dates and report to Telegram."""
@@ -202,6 +207,8 @@ async def run_date_fix(
         scope_note = f" (id > {after_id})" if after_id else ""
         if label:
             scope_note += f" | лейбл: {label}"
+        if artist:
+            scope_note += f" | артист: {artist}"
         if date_from:
             scope_note += f" | с {date_from}"
         await bot.send_message(
@@ -214,7 +221,7 @@ async def run_date_fix(
         # Fetch batch (sync, runs in executor)
         tracks = await loop.run_in_executor(
             None,
-            lambda: get_tracks_batch(limit, only_null, after_id, label=label, date_from=date_from),
+            lambda: get_tracks_batch(limit, only_null, after_id, label=label, artist=artist, date_from=date_from),
         )
 
         if not tracks:

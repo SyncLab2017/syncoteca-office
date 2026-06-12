@@ -2363,15 +2363,26 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         from datetime import date as _date, timedelta as _td
         _tl = text.lower()
 
-        # Label filter: "по лейблу X" / "лейбла X" / "лейбл X"
+        # Label filter: "по лейблу X" / "лейбла X"
         _label_fix: Optional[str] = None
         _lm = re.search(
-            r"(?:по\s+лейблу?|лейбл(?:а|е|у|ом|ях|ам)?\s+|лейбл\s+)[«\"]?([\w\s\-\.]+?)[»\"]?"
+            r"(?:по\s+лейблу?|лейбл(?:а|е|у|ом|ях|ам)?\s+)[«\"]?([\w\s\-\.]+?)[»\"]?"
             r"(?=\s*(?:[.,!?]|$|\b(?:и|с|по|за|от|до|треки|даты)\b))",
             text, re.IGNORECASE,
         )
         if _lm:
             _label_fix = _lm.group(1).strip()
+
+        # Artist filter: "по артисту X" / "по исполнителю X" / "артиста X" / "для X"
+        _artist_fix: Optional[str] = None
+        if not _label_fix:
+            _am = re.search(
+                r"(?:по\s+артисту?|по\s+исполнител[юя]|артист(?:а|у|ом|е)?\s+|исполнител[яю]\s+|репертуар[еу]?\s+)[«\"]?([\w\s\-\.]+?)[»\"]?"
+                r"(?=\s*(?:[.,!?]|$|\b(?:и|с|по|за|от|до|треки|даты|лейбл)\b))",
+                text, re.IGNORECASE,
+            )
+            if _am:
+                _artist_fix = _am.group(1).strip()
 
         # Date filter: "за сегодня" / "за вчера" / "за YYYY-MM-DD"
         _date_fix: Optional[str] = None
@@ -2384,16 +2395,24 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             if _dm:
                 _date_fix = _dm.group(1)
 
+        _has_filter = _label_fix or _artist_fix or _date_fix
         m = _re.search(r'\b(\d{1,4})\b', text)
-        limit = min(int(m.group(1)), 2000) if m else (1000 if (_label_fix or _date_fix) else 50)
-        only_null = "all" not in _tl and "все" not in _tl and not _label_fix and not _date_fix
+        limit = min(int(m.group(1)), 2000) if m else (1000 if _has_filter else 50)
+        only_null = "all" not in _tl and "все" not in _tl and not _has_filter
 
         from syncoteca.tools.date_fixer import run_date_fix
         asyncio.create_task(run_date_fix(
             chat_id, update.get_bot(), limit=limit, only_null=only_null,
-            label=_label_fix, date_from=_date_fix,
+            label=_label_fix, artist=_artist_fix, date_from=_date_fix,
         ))
-        _scope_desc = f"лейбл «{_label_fix}»" if _label_fix else ("сегодняшние треки" if _date_fix else ("только без даты" if only_null else "все треки"))
+        if _artist_fix:
+            _scope_desc = f"артист «{_artist_fix}»"
+        elif _label_fix:
+            _scope_desc = f"лейбл «{_label_fix}»"
+        elif _date_fix:
+            _scope_desc = "сегодняшние треки"
+        else:
+            _scope_desc = "только без даты" if only_null else "все треки"
         reply = (
             f"🗃️ Ковальски: запускаю проверку дат Discogs\n"
             f"Область: {_scope_desc} | Лимит: {limit}\n"
