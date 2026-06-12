@@ -232,32 +232,33 @@ async def run_date_fix(
         progress_msg = await bot.send_message(chat_id, "⏳ [0/" + str(len(tracks)) + "] Стартую…")
 
         updated = skipped = not_found = errors = 0
+        updated_log: list[str] = []  # "Артист — Трек (старый_год → новый)"
 
         for i, track in enumerate(tracks):
-            artist = track.get("artist") or ""
+            _artist = track.get("artist") or ""
             title = track.get("title") or ""
             track_id = track.get("id")
             current_date = track.get("release_date")
             current_year = _extract_year(current_date)
 
             try:
-                year = await loop.run_in_executor(None, search_discogs_year, artist, title)
+                year = await loop.run_in_executor(None, search_discogs_year, _artist, title)
 
                 if year is None:
-                    # Mark as checked so it won't block future runs
                     await loop.run_in_executor(None, update_track_date, track_id, "not_found")
                     not_found += 1
                 elif current_year and year >= current_year:
-                    # No improvement — mark as verified with existing year
                     if not current_date or current_date == "not_found":
                         await loop.run_in_executor(None, update_track_date, track_id, str(year))
                         updated += 1
+                        updated_log.append(f"• {_artist} — {title} ({year})")
                     else:
                         skipped += 1
                 else:
-                    # Earlier year found — update
                     await loop.run_in_executor(None, update_track_date, track_id, str(year))
                     updated += 1
+                    old = str(current_year) if current_year else "?"
+                    updated_log.append(f"• {_artist} — {title} ({old} → {year})")
 
             except Exception as e:
                 errors += 1
@@ -265,14 +266,15 @@ async def run_date_fix(
                     await bot.send_message(chat_id, f"❌ Ковальски: Discogs token недействителен. Остановка.")
                     return
 
-            # Edit single progress message every N tracks
+            # Edit single progress message every N tracks — show last 5 updates
             if (i + 1) % _REPORT_EVERY == 0:
                 remaining = len(tracks) - (i + 1)
+                recent = "\n".join(updated_log[-5:]) if updated_log else "—"
                 try:
                     await progress_msg.edit_text(
                         f"⏳ [{i+1}/{len(tracks)}] осталось ~{remaining}с\n"
-                        f"✅ Обновлено: {updated} | ⏭ Без изменений: {skipped} | "
-                        f"❓ Не найдено: {not_found} | ❌ Ошибки: {errors}",
+                        f"✅ Обновлено: {updated}\n"
+                        f"Последние:\n{recent}",
                     )
                 except Exception:
                     pass
@@ -286,15 +288,18 @@ async def run_date_fix(
 
         from datetime import date as _date
         today = _date.today().strftime("%d.%m.%Y")
-        await bot.send_message(
-            chat_id,
-            f"🗃️ Ковальски: проверка дат завершена — {today}\n"
-            f"✅ Обновлено: {updated}\n"
-            f"⏭ Без изменений: {skipped}\n"
-            f"❓ Не найдено на Discogs: {not_found}\n"
-            f"❌ Ошибки: {errors}\n"
-            f"📊 Всего обработано: {len(tracks)}",
-        )
+        summary_lines = [
+            f"🗃️ Ковальски: проверка дат завершена — {today}",
+            f"✅ Обновлено: {updated} | 📊 Обработано: {len(tracks)}",
+        ]
+        if updated_log:
+            # Telegram message limit ~4096 chars — cap list at 50 entries
+            shown = updated_log[:50]
+            summary_lines.append("\n🎵 Обновлённые треки:")
+            summary_lines.extend(shown)
+            if len(updated_log) > 50:
+                summary_lines.append(f"… и ещё {len(updated_log) - 50}")
+        await bot.send_message(chat_id, "\n".join(summary_lines))
 
     finally:
         _running = False
