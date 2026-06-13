@@ -167,7 +167,7 @@ def parse_export_query(text: str) -> dict:
     # Language/nationality filter
     if any(w in lower for w in ("только русск", "русские произведени", "русскоязычн", "не иностранн", "без иностранн", "отечественн", "русские треки", "русских треков", "русские песни", "русских песен", "отечественные треки", "советские треки", "советская музыка")) or re.search(r"\bрусск(?:ие|ая|ий|ого|их|им|ую)?\s+(?:трек|песн|музык|произведен|альбом)", lower):
         filters["language"] = "ru"
-    elif any(w in lower for w in ("только иностранн", "зарубежн", "не русск", "английск")):
+    elif any(w in lower for w in ("только иностранн", "иностранн", "зарубежн", "не русск", "английск")):
         filters["language"] = "foreign"
 
     # Year range detection — try most specific patterns first
