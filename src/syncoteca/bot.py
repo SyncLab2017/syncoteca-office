@@ -2485,8 +2485,11 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                     break
 
         if not _enrich_artist:
-            # Quoted name fallback — ASCII + Unicode curved quotes
-            _qea = re.search(r'[«""\''‘’“”]([\w\s\-\.]{2,40})[»""\''‘’“”]', text)
+            # Quoted name fallback -- use chr() to avoid Unicode literals in source
+            _oq = chr(0x00AB) + chr(0x201C) + chr(0x2018) + chr(0x22) + chr(0x27)
+            _cq = chr(0x00BB) + chr(0x201D) + chr(0x2019) + chr(0x22) + chr(0x27)
+            _qpat = chr(0x5B) + _oq + chr(0x5D) + r"([\w\s\-\.]{2,40})" + chr(0x5B) + _cq + chr(0x5D)
+            _qea = re.search(_qpat, text)
             if _qea:
                 _enrich_artist = _qea.group(1).strip()
 
