@@ -2375,7 +2375,8 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         if _lm:
             _label_fix = _lm.group(1).strip()
 
-        # Artist filter: "по артисту X" / "по исполнителю X" / "артиста X" / "для X"
+        # Artist filter: "по артисту X" / "по исполнителю X" / "артиста X"
+        # Also: quoted name anywhere — «Лада Дэнс», "Лада Дэнс"
         _artist_fix: Optional[str] = None
         if not _label_fix:
             _am = re.search(
@@ -2385,6 +2386,11 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             )
             if _am:
                 _artist_fix = _am.group(1).strip()
+            else:
+                # Fallback: quoted name in the message
+                _qm = re.search(r'[«"\']([\w\s\-\.]{2,40})[»"\']', text)
+                if _qm:
+                    _artist_fix = _qm.group(1).strip()
 
         # Date filter: "за сегодня" / "за вчера" / "за YYYY-MM-DD"
         _date_fix: Optional[str] = None

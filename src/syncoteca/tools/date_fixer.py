@@ -95,15 +95,27 @@ def _normalize_artist(artist: str) -> str:
     return _ARTIST_ALIASES.get(a, a)
 
 
+_CYRILLIC = re.compile(r'[а-яёА-ЯЁ]')
+_LATIN = re.compile(r'[a-zA-Z]')
+
+
 def _extract_min_year(results: list, artist_norm: str) -> int | None:
     a_key = re.sub(r"[^a-zа-яёA-ZА-ЯЁ0-9]", "", artist_norm.lower())
+    # Detect script: if artist is Cyrillic but Discogs result artists are Latin (or vice versa),
+    # skip artist-match check — can't compare cross-script strings.
+    a_is_cyrillic = bool(_CYRILLIC.search(a_key))
+    a_is_latin = bool(_LATIN.search(a_key))
     years = []
     for r in results:
         title = r.get("title", "")
         if "various" in title.lower():
             continue
         artist_part = re.sub(r"[^a-zа-яёA-ZА-ЯЁ0-9]", "", title.split(" - ")[0].lower())
-        if not (artist_part in a_key or a_key in artist_part):
+        # Cross-script mismatch: relax artist check
+        ap_is_cyrillic = bool(_CYRILLIC.search(artist_part))
+        ap_is_latin = bool(_LATIN.search(artist_part))
+        cross_script = (a_is_cyrillic and ap_is_latin) or (a_is_latin and ap_is_cyrillic)
+        if not cross_script and not (artist_part in a_key or a_key in artist_part):
             continue
         y = r.get("year")
         if y and 1900 < int(y) <= 2030:
