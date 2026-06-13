@@ -1984,6 +1984,8 @@ def _kowalski_detect_intent(text: str) -> str | None:
     if any(w in lower for w in (
         "проверь даты", "обнови даты", "discogs", "дата дискогс",
         "треки без даты", "проверить даты", "fix_dates", "fix dates",
+        "по датам", "проверь по дат", "обнови по дат", "сверь дат",
+        "проверка дат", "уточни дат", "дата релиз",
     )):
         return "fix_dates"
     if any(w in lower for w in (
