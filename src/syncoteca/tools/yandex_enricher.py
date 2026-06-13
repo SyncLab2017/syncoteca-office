@@ -15,7 +15,7 @@ import httpx
 
 ZENROWS_KEY = os.getenv("ZENROWS_KEY", "ed22055fcc6e65f4ebb401a7fdb3243c11592594")
 DELAY_S = 4.0
-DEFAULT_BATCH = 250
+DEFAULT_BATCH = 1000
 
 
 def _sb_headers() -> dict:

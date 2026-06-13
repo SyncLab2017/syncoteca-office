@@ -2494,7 +2494,7 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                 _enrich_artist = _qea.group(1).strip()
 
         m = _re.search(r'\b(\d{1,4})\b', text)
-        limit = min(int(m.group(1)), 1000) if m else (2000 if _enrich_artist else 250)
+        limit = min(int(m.group(1)), 2000) if m else (2000 if _enrich_artist else 1000)
         thinking = await update.message.reply_text("🗃️ Ковальски: пошёл посмотрю что есть для работы…")
         try:
             from syncoteca.tools.yandex_enricher import count_empty_tracks
