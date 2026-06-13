@@ -2462,19 +2462,31 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
 
     elif intent == "enrich":
         import re as _re
-        # Artist filter: "обогати Носкова" / "обогати артиста X" / "обогащение «X»"
+        # Artist filter — multiple patterns:
+        # 1. "обогати/обогащением/обогащение... [артиста] X"
+        # 2. "по артисту/исполнителю [- ] X"
+        # 3. Quoted name «X» / "X" / 'X' (including Unicode curved quotes)
         _enrich_artist: Optional[str] = None
-        _ea = re.search(
-            r"(?:обогат[иьея]+\s+(?:артист[аеу]?\s+|исполнител[яю]\s+)?|обогащени[ея]\s+(?:артист[аеу]?\s+)?)"
-            r"[«\"]?([\w\s\-\.]{2,40}?)[»\"]?"
-            r"(?=\s*(?:[.,!?]|$|\b(?:и|с|по|за|от|до|треки|базу)\b))",
-            text, re.IGNORECASE,
-        )
-        if _ea:
-            _enrich_artist = _ea.group(1).strip()
-        else:
-            # Quoted name fallback
-            _qea = re.search(r'[«"\']([\w\s\-\.]{2,40})[»"\']', text)
+        _name_re = r"([\w\s\-\.]{2,40}?)"
+        _stop = r"(?=\s*(?:[.,!?]|$|\b(?:и|с|по|за|от|до|треки|базу|через|яндекс)\b))"
+
+        for _pat in (
+            # "обогати/обогащение/обогащением [артиста/по артисту] X"
+            r"(?:обогати|обогатить|обогащени\w*)\s+(?:(?:по\s+)?(?:артист\w+|исполнител\w+)\s*[-—]?\s*)?" + _name_re + _stop,
+            # "займись обогащением по Артисту X" / "по артисту - X"
+            r"(?:по\s+)?(?:артист\w+|исполнител\w+)\s*[-—]?\s*" + _name_re + _stop,
+        ):
+            _ea = re.search(_pat, text, re.IGNORECASE)
+            if _ea:
+                _cand = _ea.group(1).strip().strip("-—").strip()
+                # Reject if it's a generic word
+                if _cand.lower() not in {"информации", "информацию", "данных", "данные", "треков", "базы"}:
+                    _enrich_artist = _cand
+                    break
+
+        if not _enrich_artist:
+            # Quoted name fallback — ASCII + Unicode curved quotes
+            _qea = re.search(r'[«""\''‘’“”]([\w\s\-\.]{2,40})[»""\''‘’“”]', text)
             if _qea:
                 _enrich_artist = _qea.group(1).strip()
 
