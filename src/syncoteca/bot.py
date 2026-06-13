@@ -2462,15 +2462,31 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
 
     elif intent == "enrich":
         import re as _re
+        # Artist filter: "обогати Носкова" / "обогати артиста X" / "обогащение «X»"
+        _enrich_artist: Optional[str] = None
+        _ea = re.search(
+            r"(?:обогат[иьея]+\s+(?:артист[аеу]?\s+|исполнител[яю]\s+)?|обогащени[ея]\s+(?:артист[аеу]?\s+)?)"
+            r"[«\"]?([\w\s\-\.]{2,40}?)[»\"]?"
+            r"(?=\s*(?:[.,!?]|$|\b(?:и|с|по|за|от|до|треки|базу)\b))",
+            text, re.IGNORECASE,
+        )
+        if _ea:
+            _enrich_artist = _ea.group(1).strip()
+        else:
+            # Quoted name fallback
+            _qea = re.search(r'[«"\']([\w\s\-\.]{2,40})[»"\']', text)
+            if _qea:
+                _enrich_artist = _qea.group(1).strip()
+
         m = _re.search(r'\b(\d{1,4})\b', text)
-        limit = min(int(m.group(1)), 1000) if m else 250
+        limit = min(int(m.group(1)), 1000) if m else (2000 if _enrich_artist else 250)
         thinking = await update.message.reply_text("🗃️ Ковальски: пошёл посмотрю что есть для работы…")
         try:
             from syncoteca.tools.yandex_enricher import count_empty_tracks
             total_pending = await loop.run_in_executor(None, count_empty_tracks)
         except Exception:
             total_pending = "?"
-        if str(total_pending) == "0":
+        if str(total_pending) == "0" and not _enrich_artist:
             reply = "🗃️ Ковальски: а у нас всё в базе хорошо — пустых треков нет."
             await thinking.edit_text(reply)
             history = DIRECT_SESSIONS["content_manager"][chat_id]
@@ -2478,9 +2494,10 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             history.append({"role": "assistant", "content": reply})
             DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
             return
+        scope_note = f" «{_enrich_artist}»" if _enrich_artist else ""
         eta = f"~{int(total_pending) * 4 // 60} мин" if str(total_pending).isdigit() and int(total_pending) > 0 else "несколько минут"
         reply = (
-            f"🗃️ Ковальски: нашёл {total_pending} треков без метаданных.\n"
+            f"🗃️ Ковальски: запускаю обогащение{scope_note}.\n"
             f"Займёт {eta}. Иду работать."
         )
         await thinking.edit_text(reply)
@@ -2488,7 +2505,7 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         history.append({"role": "user", "content": text})
         history.append({"role": "assistant", "content": reply})
         DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
-        asyncio.create_task(_run_enrich_task(chat_id, update.get_bot(), limit))
+        asyncio.create_task(_run_enrich_task(chat_id, update.get_bot(), limit, artist=_enrich_artist))
 
     elif intent == "scrape_label":
         # Extract label name from text — strip trigger phrases
@@ -2654,6 +2671,7 @@ async def _run_enrich_task(
     limit: int,
     date_from: Optional[str] = None,
     auto_discogs: bool = False,
+    artist: Optional[str] = None,
 ) -> None:
     from syncoteca.tools.yandex_enricher import enrich_batch
     import asyncio as _asyncio
@@ -2661,8 +2679,12 @@ async def _run_enrich_task(
 
     loop = _asyncio.get_event_loop()
 
-    date_label = f" за {date_from}" if date_from else ""
-    progress_msg = await bot.send_message(chat_id, f"⏳ Начинаю обогащение{date_label}…")
+    scope_label = ""
+    if artist:
+        scope_label = f" «{artist}»"
+    elif date_from:
+        scope_label = f" за {date_from}"
+    progress_msg = await bot.send_message(chat_id, f"⏳ Начинаю обогащение{scope_label}…")
     _last_edit = [0.0]
 
     def _progress(done: int, total: int, info: str) -> None:
@@ -2670,7 +2692,7 @@ async def _run_enrich_task(
         if now - _last_edit[0] < 3.5:
             return
         _last_edit[0] = now
-        text = f"⏳ Обогащение{date_label}: {done}/{total}\n✅ {info}"
+        text = f"⏳ Обогащение{scope_label}: {done}/{total}\n✅ {info}"
         fut = _asyncio.run_coroutine_threadsafe(progress_msg.edit_text(text), loop)
         try:
             fut.result(timeout=5)
@@ -2680,7 +2702,7 @@ async def _run_enrich_task(
     try:
         result = await loop.run_in_executor(
             None,
-            lambda: enrich_batch(limit=limit, progress_cb=_progress, date_from=date_from),
+            lambda: enrich_batch(limit=limit, progress_cb=_progress, date_from=date_from, artist=artist),
         )
     except Exception as e:
         await bot.send_message(chat_id, f"❌ Ковальски: ошибка обогащения — {e}")
@@ -3613,23 +3635,34 @@ async def handle_enrich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     args_str = " ".join(context.args) if context.args else ""
     args_lower = args_str.lower()
 
+    # Artist filter: /enrich Носков or /enrich artist="Носков"
+    artist_filter: Optional[str] = None
+    _am = _re.search(r'artist=["\']?([^"\']+)["\']?', args_str, _re.IGNORECASE)
+    if _am:
+        artist_filter = _am.group(1).strip()
+    elif not any(c.isdigit() for c in args_str) and args_str.strip() and args_lower not in ("today", "yesterday", "сегодня", "вчера"):
+        # Plain text args with no digits = artist name
+        artist_filter = args_str.strip()
+
     # Date filter detection
     date_from: Optional[str] = None
     auto_discogs = False
-    if "today" in args_lower or "сегодня" in args_lower:
-        date_from = _date.today().isoformat()
-        auto_discogs = True
-    elif "yesterday" in args_lower or "вчера" in args_lower:
-        date_from = (_date.today() - _timedelta(days=1)).isoformat()
-        auto_discogs = True
-    else:
-        m_date = _re.search(r'\b(20\d{2}-\d{2}-\d{2})\b', args_str)
-        if m_date:
-            date_from = m_date.group(1)
+    if not artist_filter:
+        if "today" in args_lower or "сегодня" in args_lower:
+            date_from = _date.today().isoformat()
             auto_discogs = True
+        elif "yesterday" in args_lower or "вчера" in args_lower:
+            date_from = (_date.today() - _timedelta(days=1)).isoformat()
+            auto_discogs = True
+        else:
+            m_date = _re.search(r'\b(20\d{2}-\d{2}-\d{2})\b', args_str)
+            if m_date:
+                date_from = m_date.group(1)
+                auto_discogs = True
 
+    _has_filter = artist_filter or date_from
     m_limit = _re.search(r'\b(\d{1,4})\b', args_str)
-    limit = min(int(m_limit.group(1)), 2000) if m_limit and not date_from else (2000 if date_from else 250)
+    limit = min(int(m_limit.group(1)), 2000) if m_limit and not _has_filter else (2000 if _has_filter else 250)
 
     chat_id = update.effective_chat.id
     ACTIVE_AGENT[chat_id] = "content_manager"
@@ -3643,19 +3676,23 @@ async def handle_enrich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception:
         total_pending = "?"
 
-    if str(total_pending) == "0":
+    if str(total_pending) == "0" and not _has_filter:
         await thinking.edit_text("🗃️ Ковальски: а у нас всё в базе хорошо — пустых треков нет.")
         return
 
-    date_note = f" за {date_from}" if date_from else ""
+    scope_note = f" «{artist_filter}»" if artist_filter else (f" за {date_from}" if date_from else "")
     discogs_note = " + проверка Discogs автоматом" if auto_discogs else ""
-    eta = f"~{int(total_pending) * 4 // 60} мин" if str(total_pending).isdigit() and int(total_pending) > 0 else "несколько минут"
+    eta_src = total_pending if not _has_filter else "?"
+    eta = f"~{int(eta_src) * 4 // 60} мин" if str(eta_src).isdigit() and int(eta_src) > 0 else "несколько минут"
     reply = (
-        f"🗃️ Ковальски: нашёл {total_pending} треков без метаданных{date_note}.\n"
+        f"🗃️ Ковальски: запускаю обогащение{scope_note}.\n"
         f"Займёт {eta}{discogs_note}. Иду работать."
     )
     await thinking.edit_text(reply)
-    asyncio.create_task(_run_enrich_task(chat_id, context.bot, limit, date_from=date_from, auto_discogs=auto_discogs))
+    asyncio.create_task(_run_enrich_task(
+        chat_id, context.bot, limit,
+        date_from=date_from, auto_discogs=auto_discogs, artist=artist_filter,
+    ))
 
 
 async def handle_parse_label(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
