@@ -2510,9 +2510,11 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
             return
         scope_note = f" «{_enrich_artist}»" if _enrich_artist else ""
-        eta = f"~{int(total_pending) * 4 // 60} мин" if str(total_pending).isdigit() and int(total_pending) > 0 else "несколько минут"
+        _tp = int(total_pending) if str(total_pending).isdigit() else 0
+        eta = f"~{_tp * 4 // 60} мин" if _tp > 0 else "несколько минут"
+        _pending_note = f"\nВ базе {_tp} пустых треков. Беру {limit}." if _tp > 0 else ""
         reply = (
-            f"🗃️ Ковальски: запускаю обогащение{scope_note}.\n"
+            f"🗃️ Ковальски: запускаю обогащение{scope_note}.{_pending_note}\n"
             f"Займёт {eta}. Иду работать."
         )
         await thinking.edit_text(reply)
