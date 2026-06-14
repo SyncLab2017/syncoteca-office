@@ -428,9 +428,10 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
                 f'artist.ilike."*,{a}"',     # "Земляне, Секрет"
                 f'artist.ilike."*,{a} *"',   # "Foo, Секрет Bar"
             ])
-        # Genitive/accusative ending normalization: "Киркорова" → try "Киркоров" too
-        a_stripped = re.sub(r'[аяуюыиеёо]$', '', a, flags=re.IGNORECASE)
-        if a_stripped != a and len(a_stripped) >= 4:
+        # Genitive/accusative per-word stem: "Николая Носкова" → "Николай Носков"
+        _words_stemmed = [re.sub(r'[аяуюыиеёо]$', '', w, flags=re.IGNORECASE) for w in a.split()]
+        a_stripped = ' '.join(_words_stemmed)
+        if a_stripped != a and all(len(w) >= 3 for w in _words_stemmed):
             if " " in a_stripped:
                 conditions.append(f"artist.ilike.*{a_stripped}*")
             else:
@@ -440,6 +441,10 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
                     f'artist.ilike."* {a_stripped}"',
                     f'artist.ilike."* {a_stripped} *"',
                 ])
+        # Last word (surname) stem: "Носкова" → "Носков" → broad match
+        _last_stem = _words_stemmed[-1] if _words_stemmed else ""
+        if len(_last_stem) >= 4 and _last_stem not in [w for w in a.split()]:
+            conditions.append(f"artist.ilike.*{_last_stem}*")
 
     # Music author: push first author to DB, rest checked in Python
     music_authors = filters.get("music_authors") or []

@@ -2517,9 +2517,8 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         scope_note = f" «{_enrich_artist}»" if _enrich_artist else ""
         _tp = int(total_pending) if str(total_pending).isdigit() else 0
         eta = f"~{_tp * 4 // 60} мин" if _tp > 0 else "несколько минут"
-        _pending_note = f"\nВ базе {_tp} пустых треков. Беру {limit}." if _tp > 0 else ""
         reply = (
-            f"🗃️ Ковальски: запускаю обогащение{scope_note}.{_pending_note}\n"
+            f"🗃️ Ковальски: запускаю обогащение{scope_note}.\n"
             f"Займёт {eta}. Иду работать."
         )
         await thinking.edit_text(reply)
@@ -2945,9 +2944,31 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                 from syncoteca.tools.catalog_export import parse_export_query as _pq
                 _entity_filters = _pq(user_request)
                 if _export_filters_are_clean(_entity_filters):
-                    catalog_ctx = await loop.run_in_executor(None, search_supabase_catalog, user_request)
-                    if catalog_ctx:
-                        _LAST_CATALOG_ENTITY[chat_id] = dict(_entity_filters)
+                    # If we have a clean artist filter, use fetch_tracks for accurate search
+                    # (handles genitive case — "Николая Носкова" → "Николай Носков")
+                    if _entity_filters.get("artist") and not _entity_filters.get("year_from"):
+                        from syncoteca.tools.catalog_export import fetch_tracks as _ft
+                        _direct_rows = await loop.run_in_executor(None, lambda: _ft(_entity_filters, limit=20))
+                        if _direct_rows:
+                            _total_direct = len(_direct_rows)
+                            _lines = [f"[КАТАЛОГ SYNC LAB ({_total_direct} треков):"]
+                            for _dr in _direct_rows:
+                                _dp = [f"\u2022 {_dr.get('title') or '?'}", f"\u2014 {_dr.get('artist') or '?'}"]
+                                if _dr.get("label"):
+                                    _dp.append(f"| Лейбл: {_dr['label']}")
+                                if _dr.get("release_date"):
+                                    _dp.append(f"| {_dr['release_date']}")
+                                _lines.append(" ".join(_dp))
+                            _lines.append("]")
+                            catalog_ctx = "\n".join(_lines)
+                        else:
+                            catalog_ctx = ""
+                        if catalog_ctx:
+                            _LAST_CATALOG_ENTITY[chat_id] = dict(_entity_filters)
+                    else:
+                        catalog_ctx = await loop.run_in_executor(None, search_supabase_catalog, user_request)
+                        if catalog_ctx:
+                            _LAST_CATALOG_ENTITY[chat_id] = dict(_entity_filters)
                 else:
                     catalog_ctx = ""
             enriched = f"{catalog_ctx}\n\n{user_request}" if catalog_ctx else user_request
