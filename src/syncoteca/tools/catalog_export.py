@@ -258,6 +258,18 @@ def parse_export_query(text: str) -> dict:
             if artist:
                 filters["artist"] = artist
 
+    # Artist from "песен/треков/песни [Name]" pattern (genitive): "сколько песен Носкова"
+    if not filters.get("artist"):
+        _pa = re.search(
+            r"(?:песен|песни|трек(?:ов|а|е)?|композиц(?:ий|ии|ию)?)\s+([А-ЯЁA-Z][\w\s\-\.]{1,40}?)"
+            r"(?=\s*(?:[.,!?]|$|\b(?:у|нас|есть|нет|имеется|имеются)\b))",
+            text, re.IGNORECASE,
+        )
+        if _pa:
+            _pa_artist = _strip_quotes(_pa.group(1).strip()).strip(".,!?;:")
+            if _pa_artist and not re.match(r'^(?:в|на|из|за|с|по|до|от|у)\s', _pa_artist, re.IGNORECASE):
+                filters["artist"] = _pa_artist
+
     # Music author: "автор X" / "по автору X" / "авторам X и Y" / "соавторство X и Y"
     # Supports one or two co-authors separated by "и"
     if not filters.get("music_authors"):
@@ -329,7 +341,7 @@ def parse_export_query(text: str) -> dict:
             "инфу", "информацию", "информации", "информация",
             "данные", "данных", "данным", "данного",
             "подбери", "подобрать", "подберёт",
-            "песни", "песня", "песню",
+            "песни", "песня", "песню", "песен", "песнях", "песнями",
             # Date/time words — not artist names
             "вчера", "сегодня", "позавчера", "завтра",
             "добавленные", "добавленных", "добавленным", "добавили", "добавлен",
