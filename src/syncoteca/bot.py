@@ -2387,10 +2387,15 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             if _am:
                 _artist_fix = _am.group(1).strip()
             else:
-                # Fallback: quoted name in the message
-                _qm = re.search(r'[«"\']([\w\s\-\.]{2,40})[»"\']', text)
-                if _qm:
-                    _artist_fix = _qm.group(1).strip()
+                # Fallback 1: "по датам Name" — bare name after date trigger
+                _dm_artist = re.search(r"по\s+дат(?:ам?|е|ах|ами)?\s+([\w\s\-\.]{2,40})", text, re.IGNORECASE)
+                if _dm_artist:
+                    _artist_fix = _dm_artist.group(1).strip().rstrip(".,!?")
+                else:
+                    # Fallback 2: quoted name in message
+                    _qm = re.search(r'[«"\']([\w\s\-\.]{2,40})[»"\']', text)
+                    if _qm:
+                        _artist_fix = _qm.group(1).strip()
 
         # Date filter: "за сегодня" / "за вчера" / "за YYYY-MM-DD"
         _date_fix: Optional[str] = None
