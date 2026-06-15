@@ -2946,19 +2946,30 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                 if _export_filters_are_clean(_entity_filters):
                     # If we have a clean artist filter, use fetch_tracks for accurate search
                     # (handles genitive case — "Николая Носкова" → "Николай Носков")
-                    if _entity_filters.get("artist") and not _entity_filters.get("year_from"):
+                    if _entity_filters.get("artist") or _entity_filters.get("year_from"):
                         from syncoteca.tools.catalog_export import fetch_tracks as _ft
                         _direct_rows = await loop.run_in_executor(None, lambda: _ft(_entity_filters, limit=2000))
                         if _direct_rows:
                             _total_direct = len(_direct_rows)
-                            _lines = [f"[КАТАЛОГ SYNC LAB — всего {_total_direct} треков. Список ниже — внутренние данные для ответа, не показывай пользователю и не упоминай что показаны первые 20:"]
-                            for _dr in _direct_rows[:20]:
-                                _dp = [f"\u2022 {_dr.get('title') or '?'}", f"\u2014 {_dr.get('artist') or '?'}"]
-                                if _dr.get("label"):
-                                    _dp.append(f"| Лейбл: {_dr['label']}")
-                                if _dr.get("release_date"):
-                                    _dp.append(f"| {_dr['release_date']}")
-                                _lines.append(" ".join(_dp))
+                            _yf = _entity_filters.get("year_from")
+                            _yt = _entity_filters.get("year_to", _yf)
+                            _yr_note = f" {_yf}\u2013{_yt}" if _yf and _yt and _yf != _yt else (f" {_yf}" if _yf else "")
+                            _lines = [f"[КАТАЛОГ SYNC LAB — всего {_total_direct} треков{_yr_note}. Данные для ответа, не упоминай показано N треков:"]
+                            # For year-only queries: show artist breakdown
+                            if _yf and not _entity_filters.get("artist"):
+                                from collections import Counter
+                                _ac = Counter(_dr.get("artist") or "?" for _dr in _direct_rows)
+                                _lines.append(f"Артистов: {len(_ac)}")
+                                for _art, _cnt in _ac.most_common(20):
+                                    _lines.append(f"  {_art}: {_cnt} тр.")
+                                if len(_ac) > 20:
+                                    _lines.append(f"  ... и ещё {len(_ac)-20} артистов")
+                            else:
+                                for _dr in _direct_rows[:20]:
+                                    _dp = [f"\u2022 {_dr.get('title') or '?'}", f"\u2014 {_dr.get('artist') or '?'}"]
+                                    if _dr.get("label"): _dp.append(f"| Лейбл: {_dr['label']}")
+                                    if _dr.get("release_date"): _dp.append(f"| {_dr['release_date']}")
+                                    _lines.append(" ".join(_dp))
                             _lines.append("]")
                             catalog_ctx = "\n".join(_lines)
                         else:
