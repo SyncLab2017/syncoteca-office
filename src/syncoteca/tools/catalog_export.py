@@ -262,11 +262,13 @@ def parse_export_query(text: str) -> dict:
     if not filters.get("artist"):
         _pa = re.search(
             r"(?:песен|песни|трек(?:ов|а|е)?|композиц(?:ий|ии|ию)?)\s+([А-ЯЁA-Z][\w\s\-\.]{1,40}?)"
-            r"(?=\s*(?:[.,!?]|$|\b(?:у|нас|есть|нет|имеется|имеются)\b))",
+            r"(?=\s*(?:[.,!?]|$|\b(?:у|нас|есть|нет|имеется|имеются|в|на|из|за|с|по|до|от)\b))",
             text, re.IGNORECASE,
         )
         if _pa:
             _pa_artist = _strip_quotes(_pa.group(1).strip()).strip(".,!?;:")
+            # Strip trailing prepositional phrases: "Nautilus Pampilius в базе" → "Nautilus Pampilius"
+            _pa_artist = re.sub(r'\s+(?:в|на|из|за|с|по|до|от|у)\s+\w+$', '', _pa_artist, flags=re.IGNORECASE).strip()
             if _pa_artist and not re.match(r'^(?:в|на|из|за|с|по|до|от|у)\s', _pa_artist, re.IGNORECASE):
                 filters["artist"] = _pa_artist
 

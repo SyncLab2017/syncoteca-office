@@ -2973,7 +2973,14 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                             _lines.append("]")
                             catalog_ctx = "\n".join(_lines)
                         else:
-                            catalog_ctx = ""
+                            _a_note = _entity_filters.get("artist", "")
+                            _yf_note = _entity_filters.get("year_from", "")
+                            if _a_note:
+                                catalog_ctx = f"[КАТАЛОГ SYNC LAB: поиск по артисту '{_a_note}' — 0 треков найдено.]"
+                            elif _yf_note:
+                                catalog_ctx = f"[КАТАЛОГ SYNC LAB: за период {_yf_note} — 0 треков найдено.]"
+                            else:
+                                catalog_ctx = ""
                         if catalog_ctx:
                             _LAST_CATALOG_ENTITY[chat_id] = dict(_entity_filters)
                     else:
