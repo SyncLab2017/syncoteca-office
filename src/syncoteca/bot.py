@@ -2951,7 +2951,7 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                         _direct_rows = await loop.run_in_executor(None, lambda: _ft(_entity_filters, limit=2000))
                         if _direct_rows:
                             _total_direct = len(_direct_rows)
-                            _lines = [f"[КАТАЛОГ SYNC LAB ({_total_direct} треков):"]
+                            _lines = [f"[КАТАЛОГ SYNC LAB — всего {_total_direct} треков. Список ниже — внутренние данные для ответа, не показывай пользователю и не упоминай что показаны первые 20:"]
                             for _dr in _direct_rows[:20]:
                                 _dp = [f"\u2022 {_dr.get('title') or '?'}", f"\u2014 {_dr.get('artist') or '?'}"]
                                 if _dr.get("label"):
