@@ -2740,7 +2740,7 @@ async def _run_enrich_task(
     except Exception:
         pass
 
-    lines = [f"🗃️ Ковальски: обогащение{date_label} завершено.", f"Обработано: {total} треков."]
+    lines = [f"🗃️ Ковальски: обогащение{scope_label} завершено.", f"Обработано: {total} треков."]
     if ok:
         lines.append(f"✅ Успешно: {ok}")
     if skipped:
