@@ -2999,10 +2999,13 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                                 catalog_ctx = ""
                         if catalog_ctx:
                             _LAST_CATALOG_ENTITY[chat_id] = dict(_entity_filters)
+                            # New catalog data invalidates any pending email from a previous export
+                            _PENDING_EMAIL_EXPORT.pop(chat_id, None)
                     else:
                         catalog_ctx = await loop.run_in_executor(None, search_supabase_catalog, user_request)
                         if catalog_ctx:
                             _LAST_CATALOG_ENTITY[chat_id] = dict(_entity_filters)
+                            _PENDING_EMAIL_EXPORT.pop(chat_id, None)
                 else:
                     catalog_ctx = ""
             enriched = f"{catalog_ctx}\n\n{user_request}" if catalog_ctx else user_request
