@@ -2965,8 +2965,24 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                                 if len(_ac) > 20:
                                     _lines.append(f"  ... и ещё {len(_ac)-20} артистов")
                             else:
+                                from collections import Counter
+                                # Year breakdown across ALL rows for accurate stats
+                                _yc = Counter()
+                                for _dr in _direct_rows:
+                                    _rd = _dr.get("release_date") or ""
+                                    import re as _re
+                                    _ym = _re.search(r"\b(\d{4})\b", str(_rd))
+                                    if _ym: _yc[_ym.group(1)] += 1
+                                if _yc:
+                                    _lines.append(f"По годам:")
+                                    for _yr, _yc_n in sorted(_yc.items()):
+                                        _lines.append(f"  {_yr} — {{_yc_n}} тр.")
+                                    _no_date = _total_direct - sum(_yc.values())
+                                    if _no_date > 0:
+                                        _lines.append(f"  Без даты: {{_no_date}} тр.")
+                                # First 20 tracks with details
                                 for _dr in _direct_rows[:20]:
-                                    _dp = [f"\u2022 {_dr.get('title') or '?'}", f"\u2014 {_dr.get('artist') or '?'}"]
+                                    _dp = [f"• {_dr.get('title') or '?'}", f"— {_dr.get('artist') or '?'}"]
                                     if _dr.get("label"): _dp.append(f"| Лейбл: {_dr['label']}")
                                     if _dr.get("release_date"): _dp.append(f"| {_dr['release_date']}")
                                     _lines.append(" ".join(_dp))
@@ -2993,6 +3009,37 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
             result = await loop.run_in_executor(
                 None, run_direct_agent, agent_name, chat_id, enriched
             )
+            # If Claude signals an export but no actual export was triggered,
+            # intercept and run the real export so the file is actually delivered.
+            _EXP_SIGNALS = ("Выгружаю", "Формирую выгрузку", "файл придёт", "файл будет")
+            _r_str = str(result)
+            if any(_s in _r_str for _s in _EXP_SIGNALS):
+                from syncoteca.tools.catalog_export import parse_export_query as _pqe, export_catalog as _ece
+                _re_filters = _pqe(_r_str)
+                # Fallback: if Claude's text alone has no clean entity, use cached entity
+                _re_query = _r_str
+                if not _export_filters_are_clean(_re_filters):
+                    _cached_ent = _LAST_CATALOG_ENTITY.get(chat_id)
+                    if isinstance(_cached_ent, dict) and _export_filters_are_clean(_cached_ent):
+                        _re_art = _cached_ent.get("artist", "")
+                        _re_yf = _cached_ent.get("year_from")
+                        _re_query = _re_art or (str(_re_yf) if _re_yf else "")
+                        _re_filters = _cached_ent
+                if _export_filters_are_clean(_re_filters) and _re_query:
+                    try:
+                        import io as _io_exp
+                        _re_bytes, _re_fname, _re_cnt, _ = await loop.run_in_executor(None, _ece, _re_query)
+                        if _re_cnt > 0:
+                            await update.message.reply_document(
+                                document=_io_exp.BytesIO(_re_bytes),
+                                filename=_re_fname,
+                                caption=f"Отправлено: {_re_fname} ({_re_cnt} треков)",
+                            )
+                            _exp_subj = _re_filters.get("artist") or str(_re_filters.get("year_from", ""))
+                            DIRECT_SESSIONS["content_manager"][chat_id].append({"role": "assistant", "content": f"[Выгрузка: {_exp_subj} — {_re_cnt} треков → {_re_fname}]"})
+                            _LAST_CATALOG_ENTITY.pop(chat_id, None)
+                    except Exception as _re_exc:
+                        logger.warning(f"Auto-export after Claude signal failed: {_re_exc}")
         elif agent_name in DIRECT_AGENTS:
             result = await loop.run_in_executor(
                 None, run_direct_agent, agent_name, chat_id, user_request
