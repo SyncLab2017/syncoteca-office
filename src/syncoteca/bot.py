@@ -1986,6 +1986,9 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "треки без даты", "проверить даты", "fix_dates", "fix dates",
         "по датам", "проверь по дат", "обнови по дат", "сверь дат",
         "проверка дат", "уточни дат", "дата релиз",
+        "даты релизов", "даты релиза", "дату релиза",
+        "проверь на дат", "сверь на дат", "проверить на дат",
+        "корректност", "корректные дат", "проверь корректн",
     )):
         return "fix_dates"
     if any(w in lower for w in (
@@ -2411,7 +2414,7 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         _has_filter = _label_fix or _artist_fix or _date_fix
         m = _re.search(r'\b(\d{1,4})\b', text)
         limit = min(int(m.group(1)), 2000) if m else (1000 if _has_filter else 50)
-        only_null = "all" not in _tl and "все" not in _tl and not _has_filter
+        only_null = "all" not in _tl and "все" not in _tl and "корректн" not in _tl and not _has_filter
 
         from syncoteca.tools.date_fixer import run_date_fix
         asyncio.create_task(run_date_fix(
