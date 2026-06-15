@@ -2415,7 +2415,7 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         _has_filter = _label_fix or _artist_fix or _date_fix
         m = _re.search(r'\b(\d{1,4})\b', text)
         limit = min(int(m.group(1)), 2000) if m else (1000 if _has_filter else 500)
-        only_null = "all" not in _tl and "все" not in _tl and "корректн" not in _tl and not _has_filter
+        only_null = "all" not in _tl and "все" not in _tl and "корректн" not in _tl and "последн" not in _tl and not _has_filter
 
         from syncoteca.tools.date_fixer import run_date_fix
         asyncio.create_task(run_date_fix(
@@ -3629,12 +3629,14 @@ async def handle_verify_dates(update: Update, context: ContextTypes.DEFAULT_TYPE
     from syncoteca.tools.date_fixer import run_date_fix
 
     args = context.args or []
-    limit = 200
+    limit = 500
     after_id = 0
+    _limit_set = False
     for a in args:
         if a.isdigit():
-            if limit == 200:
-                limit = min(int(a), 1000)
+            if not _limit_set:
+                limit = min(int(a), 2000)
+                _limit_set = True
             else:
                 after_id = int(a)
 
