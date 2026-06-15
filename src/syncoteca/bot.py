@@ -2948,11 +2948,11 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                     # (handles genitive case — "Николая Носкова" → "Николай Носков")
                     if _entity_filters.get("artist") and not _entity_filters.get("year_from"):
                         from syncoteca.tools.catalog_export import fetch_tracks as _ft
-                        _direct_rows = await loop.run_in_executor(None, lambda: _ft(_entity_filters, limit=20))
+                        _direct_rows = await loop.run_in_executor(None, lambda: _ft(_entity_filters, limit=2000))
                         if _direct_rows:
                             _total_direct = len(_direct_rows)
                             _lines = [f"[КАТАЛОГ SYNC LAB ({_total_direct} треков):"]
-                            for _dr in _direct_rows:
+                            for _dr in _direct_rows[:20]:
                                 _dp = [f"\u2022 {_dr.get('title') or '?'}", f"\u2014 {_dr.get('artist') or '?'}"]
                                 if _dr.get("label"):
                                     _dp.append(f"| Лейбл: {_dr['label']}")
