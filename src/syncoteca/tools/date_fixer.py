@@ -36,7 +36,7 @@ def _sb_base() -> str:
 
 
 def get_tracks_batch(
-    limit: int = 50,
+    limit: int = 500,
     only_null: bool = True,
     after_id: int = 0,
     label: Optional[str] = None,
@@ -193,7 +193,7 @@ _running: bool = False
 async def run_date_fix(
     chat_id: int,
     bot,
-    limit: int = 50,
+    limit: int = 500,
     only_null: bool = True,
     after_id: int = 0,
     label: Optional[str] = None,

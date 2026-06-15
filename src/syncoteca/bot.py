@@ -2414,7 +2414,7 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
 
         _has_filter = _label_fix or _artist_fix or _date_fix
         m = _re.search(r'\b(\d{1,4})\b', text)
-        limit = min(int(m.group(1)), 2000) if m else (1000 if _has_filter else 50)
+        limit = min(int(m.group(1)), 2000) if m else (1000 if _has_filter else 500)
         only_null = "all" not in _tl and "все" not in _tl and "корректн" not in _tl and not _has_filter
 
         from syncoteca.tools.date_fixer import run_date_fix
