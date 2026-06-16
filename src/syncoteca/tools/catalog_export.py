@@ -318,6 +318,8 @@ def parse_export_query(text: str) -> dict:
     # Fallback: bare words → artist only when no entity filter found yet.
     # Skip when year range already found AND text is long — avoids extracting
     # conversational garbage like "Ковальский табличку" from "репертуар в периоде 1980-1989 годов...".
+    # Exception: if ALL remaining (non-stop) words are Title-cased proper names (e.g. "Maschina Records"),
+    # allow extraction even with year present — those are clearly an artist/label name.
     _year_found = bool(filters.get("year_from"))
     _text_long = len(text.split()) >= 3  # skip fallback when year found + 3+ words remain
     if not filters.get("artist") and not filters.get("label") and not filters.get("genre") and not (_year_found and _text_long):
@@ -394,6 +396,30 @@ def parse_export_query(text: str) -> dict:
         words = [w for w in words if w]
         if 1 <= len(words) <= 4:
             filters["artist"] = " ".join(words)
+    elif _year_found and _text_long and not filters.get("artist") and not filters.get("label") and not filters.get("genre"):
+        # Year found + long text: still try if all remaining non-stop words are proper names (Title-cased).
+        # Handles "выгрузи Maschina Records в периоде 1990-1995" → label="Maschina Records"
+        stop = {
+            "выгрузи", "выгрузим", "выгрузите", "выгружаем", "выгружаете", "выгружать",
+            "выгрузка", "выгрузку", "выгружай", "выгрузить",
+            "экспорт", "экспортируй", "сделай", "дай", "покажи", "скинь",
+            "треки", "трек", "треков", "трека", "репертуар", "исполнитель",
+            "в", "на", "из", "за", "с", "по", "до", "от", "у", "при",
+            "периоде", "периода", "периоду", "периодом", "периодах",
+            "интервале", "интервала", "интервале", "диапазоне", "диапазона",
+            "промежутке", "промежуток", "годов", "годах", "все", "мне",
+            "пожалуйста", "список", "полный", "полная", "полностью",
+            "файл", "да", "нет", "всё", "хорошо", "ладно",
+        }
+        proper_words = [
+            _strip_quotes(w.strip(".,!?")) for w in text.split()
+            if w.lower().strip(".,!?«» ") not in stop
+            and not re.match(r'^(?:19|20)\d{2}(?:[-–—]\d{4})?$', w.strip(".,!?"))
+            and w.strip(".,!?«» ")
+        ]
+        proper_words = [w for w in proper_words if w]
+        if 1 <= len(proper_words) <= 4 and all(w[0].isupper() for w in proper_words if w):
+            filters["artist"] = " ".join(proper_words)
 
     # Clear artist if music_authors already set and artist looks like author-context noise
     if filters.get("music_authors") and filters.get("artist"):
@@ -560,6 +586,56 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
             rows = [r for r in rows if not _cyrillic.search(r.get("artist") or r.get("title") or "")]
 
     return rows
+
+
+def fetch_catalog_stats() -> dict:
+    """Return catalog statistics: total tracks, unprocessed count, per-label breakdown.
+
+    Returns:
+        {
+            "total": int,
+            "unprocessed": int,        # album_processed = false
+            "label_counts": {label: count, ...}  # sorted by count desc
+        }
+    """
+    sb = _sb_base()
+    hdrs = _sb_headers()
+
+    def _count(extra_params: dict) -> int:
+        r = httpx.get(
+            f"{sb}/rest/v1/tracks",
+            headers={**hdrs, "Prefer": "count=exact"},
+            params={"select": "id", "limit": "1", **extra_params},
+            timeout=15,
+        )
+        m = re.search(r'/(\d+)', r.headers.get("Content-Range", "/0"))
+        return int(m.group(1)) if m else 0
+
+    total = _count({})
+    unprocessed = _count({"album_processed": "is.false"})
+
+    # Paginate all rows selecting only label to build per-label counts
+    label_counts: dict[str, int] = {}
+    offset = 0
+    PAGE = 1000
+    while True:
+        r = httpx.get(
+            f"{sb}/rest/v1/tracks",
+            headers=hdrs,
+            params={"select": "label", "limit": str(PAGE), "offset": str(offset)},
+            timeout=30,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        for row in rows:
+            lbl = (row.get("label") or "").strip() or "(без лейбла)"
+            label_counts[lbl] = label_counts.get(lbl, 0) + 1
+        if len(rows) < PAGE:
+            break
+        offset += PAGE
+
+    sorted_labels = dict(sorted(label_counts.items(), key=lambda x: -x[1]))
+    return {"total": total, "unprocessed": unprocessed, "label_counts": sorted_labels}
 
 
 def fetch_recent_tracks(limit: int = 50) -> list[dict]:

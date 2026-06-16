@@ -1963,6 +1963,37 @@ def _rika_catalog_redirect(text: str) -> bool:
     return any(sig in lower for sig in catalog_signals)
 
 
+def _format_catalog_stats(stats: dict) -> str:
+    """Format fetch_catalog_stats() result into a Telegram message."""
+    total = stats.get("total", 0)
+    unprocessed = stats.get("unprocessed", 0)
+    processed = total - unprocessed
+    label_counts: dict = stats.get("label_counts", {})
+
+    pct_ready = f"{processed / total * 100:.1f}%" if total else "0%"
+    lines = [
+        "📊 Статистика базы SYNC LAB",
+        "",
+        f"Всего треков: {total:,}".replace(",", " "),
+        f"Обработано: {processed:,} ({pct_ready})".replace(",", " "),
+        f"Необработанных: {unprocessed:,}".replace(",", " "),
+        "",
+        f"Лейблов в базе: {len(label_counts)}",
+    ]
+
+    if label_counts:
+        lines.append("")
+        lines.append("Топ лейблов по количеству треков:")
+        shown = list(label_counts.items())[:30]
+        for i, (lbl, cnt) in enumerate(shown, 1):
+            lines.append(f"{i}. {lbl} — {cnt:,}".replace(",", " "))
+        remaining = len(label_counts) - len(shown)
+        if remaining > 0:
+            lines.append(f"… и ещё {remaining} лейблов")
+
+    return "\n".join(lines)
+
+
 def _kowalski_detect_intent(text: str) -> str | None:
     """Detect catalog tool intent from natural language. Returns tool name or None."""
     lower = text.lower()
@@ -2038,6 +2069,16 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "обогат", "обогащ", "обогот",
     )):
         return "enrich"
+    if any(w in lower for w in (
+        "статистика базы", "статистика каталога", "статистика треков",
+        "сколько треков по лейблам", "треков по лейблам", "по всем лейблам",
+        "статистику базы", "статистику каталога",
+        "сколько всего треков", "общее количество треков",
+        "разбивка по лейблам", "разбивка по label",
+        "покажи лейблы", "все лейблы с количеством",
+        "статистику по лейблам", "stats", "catalog stats",
+    )):
+        return "stats"
     return None
 
 
@@ -2601,6 +2642,16 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             await update.message.reply_text("⏭ Ковальски: текущий альбом пропущен, перехожу к следующему.")
         else:
             await update.message.reply_text("🗃️ Ковальски: парсинг сейчас не запущен.")
+
+    elif intent == "stats":
+        thinking = await update.message.reply_text("📊 Ковальски: считаю статистику базы…")
+        try:
+            from syncoteca.tools.catalog_export import fetch_catalog_stats
+            stats = await loop.run_in_executor(None, fetch_catalog_stats)
+            await thinking.delete()
+            await update.message.reply_text(_format_catalog_stats(stats))
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка статистики: {e}")
 
 
 async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: str, prefix: str = "") -> None:
@@ -3746,6 +3797,24 @@ async def handle_check_catalog(update: Update, context: ContextTypes.DEFAULT_TYP
         await thinking.edit_text(f"❌ Ошибка аудита: {e}")
 
 
+async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/stats — Kowalski: catalog statistics by total, unprocessed, and per-label breakdown."""
+    if not _is_owner(update):
+        return await _deny(update)
+
+    thinking = await update.message.reply_text("📊 Ковальски: считаю статистику базы…")
+    loop = asyncio.get_event_loop()
+
+    try:
+        from syncoteca.tools.catalog_export import fetch_catalog_stats
+        stats = await loop.run_in_executor(None, fetch_catalog_stats)
+        await thinking.delete()
+        await update.message.reply_text(_format_catalog_stats(stats))
+    except Exception as e:
+        logger.exception("Stats error")
+        await thinking.edit_text(f"❌ Ошибка статистики: {e}")
+
+
 async def handle_export_anomalies(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/export_anomalies — Kowalski exports tracks with incomplete metadata to Excel."""
     if not _is_owner(update):
@@ -3940,6 +4009,7 @@ async def post_init(app: Application) -> None:
         BotCommand("memory", "Знания: показать — /memory рико"),
         BotCommand("teach_stop", "Знания: остановить режим обучения"),
         BotCommand("briefing", "Брифинг задач Asana на сегодня"),
+        BotCommand("stats", "Ковальски: статистика базы по лейблам"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -3970,6 +4040,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("parse_label", handle_parse_label))
     app.add_handler(CommandHandler("stop_label_parse", handle_stop_label_parse))
     app.add_handler(CommandHandler("export", handle_export))
+    app.add_handler(CommandHandler("stats", handle_stats))
     app.add_handler(CommandHandler("check_catalog", handle_check_catalog))
     app.add_handler(CommandHandler("export_anomalies", handle_export_anomalies))
     app.add_handler(CommandHandler("asana_debug", handle_asana_debug))
