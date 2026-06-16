@@ -4120,21 +4120,19 @@ async def post_init(app: Application) -> None:
     commands = [
         BotCommand("start", "Координатор — начать сначала"),
         BotCommand("license", "Рико (лицензии, права)"),
-        BotCommand("kowalski", "Ковальски (контент, каталог, метаданные)"),
-        BotCommand("enrich", "Ковальски: обогащение треков (Яндекс Музыка)"),
-        BotCommand("parse_label", "Ковальски: парсинг каталога лейбла"),
-        BotCommand("stop_label_parse", "Ковальски: остановить парсинг лейбла"),
-        BotCommand("verify_dates", "Ковальски: перепроверить даты (Discogs)"),
         BotCommand("lawyer", "Ксюша (договоры, юрист)"),
         BotCommand("accountant", "Марина (роялти, бухгалтерия)"),
         BotCommand("bizdev", "Директор по развитию"),
         BotCommand("dev", "Разработчик"),
-        BotCommand("know", "Знания: запомнить — /know рико текст"),
-        BotCommand("memory", "Знания: показать — /memory рико"),
-        BotCommand("teach_stop", "Знания: остановить режим обучения"),
         BotCommand("briefing", "Брифинг задач Asana на сегодня"),
-        BotCommand("stats", "Ковальски: статистика базы по лейблам"),
+        # Ковальски — каталог, контент, метаданные (по алфавиту)
+        BotCommand("kowalski", "Ковальски (контент, каталог, метаданные)"),
         BotCommand("sync_labels", "Ковальски: добавить новые лейблы в реестр"),
+        BotCommand("enrich", "Ковальски: обогащение треков (Яндекс Музыка)"),
+        BotCommand("stop_label_parse", "Ковальски: остановить парсинг лейбла"),
+        BotCommand("parse_label", "Ковальски: парсинг каталога лейбла"),
+        BotCommand("verify_dates", "Ковальски: перепроверить даты (Discogs)"),
+        BotCommand("stats", "Ковальски: статистика базы по лейблам"),
     ]
     await app.bot.set_my_commands(commands)
 
