@@ -2076,9 +2076,16 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "сколько всего треков", "общее количество треков",
         "разбивка по лейблам", "разбивка по label",
         "покажи лейблы", "все лейблы с количеством",
-        "статистику по лейблам", "stats", "catalog stats",
+        "статистику по лейблам", "сводку по лейблам",
+        "выгрузи лейблы", "выгрузи статистику лейблов", "выгрузи сводку",
+        "stats", "catalog stats",
     )):
         return "stats"
+    if re.search(
+        r"(?:статистика|статистику|лейблы|сублейблы|подлейблы|группа|группу)\s+(?:по\s+)?([«»\w][\w\s.&\-]{1,50})",
+        lower
+    ):
+        return "stats_parent"
     return None
 
 
@@ -2646,12 +2653,46 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
     elif intent == "stats":
         thinking = await update.message.reply_text("📊 Ковальски: считаю статистику базы…")
         try:
-            from syncoteca.tools.catalog_export import fetch_catalog_stats
+            from syncoteca.tools.catalog_export import fetch_catalog_stats, fetch_label_stats_for_excel, build_label_stats_excel
             stats = await loop.run_in_executor(None, fetch_catalog_stats)
+            await thinking.edit_text("📊 Ковальски: формирую Excel по лейблам…")
+            label_rows = await loop.run_in_executor(None, fetch_label_stats_for_excel)
+            xlsx = await loop.run_in_executor(None, build_label_stats_excel, label_rows, "Лейблы SYNC LAB")
             await thinking.delete()
             await update.message.reply_text(_format_catalog_stats(stats))
+            await update.message.reply_document(
+                document=io.BytesIO(xlsx),
+                filename="SYNCLAB_labels_stats.xlsx",
+                caption=f"📋 Все лейблы: {len(label_rows)} | Красные — не в таблице labels | Жёлтые — 0 треков",
+                read_timeout=60, write_timeout=60,
+            )
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка статистики: {e}")
+
+    elif intent == "stats_parent":
+        import re as _re
+        _pm = _re.search(
+            r"(?:статистика|статистику|лейблы|сублейблы|подлейблы|группа|группу)\s+(?:по\s+)?([«»\w][\w\s.&\-]{1,50})",
+            text, _re.IGNORECASE,
+        )
+        _parent = re.sub(r'[«»"\']', '', _pm.group(1).strip().strip(".,!?")).strip() if _pm else None
+        if not _parent:
+            await update.message.reply_text("🗃️ Уточни: «статистика по [название группы лейблов]»")
+            return
+        thinking = await update.message.reply_text(f"📊 Ковальски: ищу сублейблы «{_parent}»…")
+        try:
+            from syncoteca.tools.catalog_export import fetch_parent_stats
+            pstats = await loop.run_in_executor(None, fetch_parent_stats, _parent)
+            await thinking.delete()
+            lines = [f"📊 Группа лейблов: {pstats['parent']}", f"Всего треков: {pstats['total']:,}".replace(",", " "), ""]
+            for s in pstats["sublabels"]:
+                mark = "✅" if s["tracks"] > 0 else "⬜"
+                lines.append(f"{mark} {s['name']} — {s['tracks']:,}".replace(",", " "))
+            if pstats["missing"]:
+                lines.append(f"\n⬜ Без треков ({len(pstats['missing'])} лейблов) — нужно добавить в парсинг")
+            await update.message.reply_text("\n".join(lines))
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка: {e}")
 
 
 async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: str, prefix: str = "") -> None:
@@ -3806,10 +3847,20 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     loop = asyncio.get_event_loop()
 
     try:
-        from syncoteca.tools.catalog_export import fetch_catalog_stats
+        from syncoteca.tools.catalog_export import fetch_catalog_stats, fetch_label_stats_for_excel, build_label_stats_excel
         stats = await loop.run_in_executor(None, fetch_catalog_stats)
+        await thinking.edit_text("📊 Ковальски: формирую Excel по лейблам…")
+        label_rows = await loop.run_in_executor(None, fetch_label_stats_for_excel)
+        xlsx = await loop.run_in_executor(None, build_label_stats_excel, label_rows, "Лейблы SYNC LAB")
         await thinking.delete()
         await update.message.reply_text(_format_catalog_stats(stats))
+        import io as _io
+        await update.message.reply_document(
+            document=_io.BytesIO(xlsx),
+            filename="SYNCLAB_labels_stats.xlsx",
+            caption=f"📋 Все лейблы: {len(label_rows)} | Красные — не в таблице labels | Жёлтые — 0 треков",
+            read_timeout=60, write_timeout=60,
+        )
     except Exception as e:
         logger.exception("Stats error")
         await thinking.edit_text(f"❌ Ошибка статистики: {e}")

@@ -638,6 +638,180 @@ def fetch_catalog_stats() -> dict:
     return {"total": total, "unprocessed": unprocessed, "label_counts": sorted_labels}
 
 
+def fetch_parent_stats(parent: str) -> dict:
+    """Return track counts for all sublabels of a parent label group.
+
+    Returns:
+        {
+            "parent": str,
+            "total": int,
+            "sublabels": [{"name": str, "id": str, "tracks": int}, ...],  # sorted by tracks desc
+            "missing": [{"name": str, "id": str}],  # sublabels with 0 tracks in catalog
+        }
+    """
+    sb = _sb_base()
+    hdrs = _sb_headers()
+
+    # Fetch sublabels from labels table
+    r = httpx.get(
+        f"{sb}/rest/v1/labels",
+        headers=hdrs,
+        params={"parent": f"eq.{parent}", "select": "id,name", "order": "name.asc", "limit": "500"},
+        timeout=15,
+    )
+    r.raise_for_status()
+    sublabels = r.json()
+
+    def _cnt(label_name: str) -> int:
+        rr = httpx.get(
+            f"{sb}/rest/v1/tracks",
+            headers={**hdrs, "Prefer": "count=exact"},
+            params={"label": f"eq.{label_name}", "select": "id", "limit": "1"},
+            timeout=10,
+        )
+        m = re.search(r'/(\d+)', rr.headers.get("Content-Range", "/0"))
+        return int(m.group(1)) if m else 0
+
+    results = []
+    total = 0
+
+    # Count for parent itself (some tracks may be tagged with parent name directly)
+    parent_cnt = _cnt(parent)
+    if parent_cnt > 0:
+        results.append({"name": parent, "id": None, "tracks": parent_cnt, "is_self": True})
+        total += parent_cnt
+
+    for sub in sublabels:
+        cnt = _cnt(sub["name"])
+        total += cnt
+        results.append({"name": sub["name"], "id": sub.get("id"), "tracks": cnt, "is_self": False})
+
+    results.sort(key=lambda x: -x["tracks"])
+    return {
+        "parent": parent,
+        "total": total,
+        "sublabels": results,
+        "missing": [s for s in results if s["tracks"] == 0],
+    }
+
+
+def fetch_label_stats_for_excel() -> list[dict]:
+    """Merge tracks label counts with labels table (parent grouping).
+
+    Returns list sorted by tracks desc:
+    [{"label": str, "parent": str, "tracks": int, "in_labels_table": bool}, ...]
+    Labels in tracks but absent from labels table are marked in_labels_table=False.
+    """
+    sb = _sb_base()
+    hdrs = _sb_headers()
+
+    # 1. All track label counts (paginated)
+    label_counts: dict[str, int] = {}
+    offset = 0
+    PAGE = 1000
+    while True:
+        r = httpx.get(
+            f"{sb}/rest/v1/tracks",
+            headers=hdrs,
+            params={"select": "label", "limit": str(PAGE), "offset": str(offset)},
+            timeout=30,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        for row in rows:
+            lbl = (row.get("label") or "").strip()
+            if lbl:
+                label_counts[lbl] = label_counts.get(lbl, 0) + 1
+        if len(rows) < PAGE:
+            break
+        offset += PAGE
+
+    # 2. All labels from labels table
+    r = httpx.get(
+        f"{sb}/rest/v1/labels",
+        headers=hdrs,
+        params={"select": "id,name,parent", "limit": "10000", "order": "name.asc"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    labels_db = {row["name"].strip(): row for row in r.json()}
+
+    # 3. Merge
+    result: list[dict] = []
+    seen: set[str] = set()
+
+    for name, row in labels_db.items():
+        cnt = label_counts.get(name, 0)
+        result.append({
+            "label": name,
+            "parent": (row.get("parent") or "").strip(),
+            "tracks": cnt,
+            "in_labels_table": True,
+        })
+        seen.add(name)
+
+    # Labels in tracks but absent from labels table
+    for lbl, cnt in label_counts.items():
+        if lbl not in seen:
+            result.append({
+                "label": lbl,
+                "parent": "",
+                "tracks": cnt,
+                "in_labels_table": False,
+            })
+
+    result.sort(key=lambda x: -x["tracks"])
+    return result
+
+
+def build_label_stats_excel(rows: list[dict], title: str = "Лейблы SYNC LAB") -> bytes:
+    """Build label statistics .xlsx: Parent | Label | Tracks | In DB columns."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Лейблы"
+
+    hdr_fill = PatternFill(start_color="1F2D3D", end_color="1F2D3D", fill_type="solid")
+    hdr_font = Font(color="FFFFFF", bold=True, size=11)
+    missing_fill = PatternFill(start_color="FFE0E0", end_color="FFE0E0", fill_type="solid")
+    zero_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+
+    columns = [("№", 5), ("Группа (parent)", 30), ("Лейбл", 40), ("Треков", 10), ("В базе лейблов", 16)]
+    for col_idx, (col_name, col_width) in enumerate(columns, 1):
+        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell.font = hdr_font
+        cell.fill = hdr_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[cell.column_letter].width = col_width
+    ws.row_dimensions[1].height = 20
+    ws.freeze_panes = "A2"
+
+    for i, row in enumerate(rows, 1):
+        in_db = row.get("in_labels_table", True)
+        tracks = row.get("tracks", 0)
+        fill = missing_fill if not in_db else (zero_fill if tracks == 0 else None)
+        data = [i, row.get("parent") or "", row.get("label") or "", tracks, "Да" if in_db else "Нет"]
+        for col_idx, value in enumerate(data, 1):
+            cell = ws.cell(row=i + 1, column=col_idx, value=value)
+            if fill:
+                cell.fill = fill
+
+    # Summary sheet
+    ws2 = wb.create_sheet("Сводка")
+    ws2["A1"] = title
+    ws2["A3"] = "Лейблов всего"
+    ws2["B3"] = len(rows)
+    ws2["A4"] = "Лейблов без треков"
+    ws2["B4"] = sum(1 for r in rows if r.get("tracks", 0) == 0)
+    ws2["A5"] = "Лейблов не в таблице labels"
+    ws2["B5"] = sum(1 for r in rows if not r.get("in_labels_table", True))
+    ws2["A6"] = "Всего треков"
+    ws2["B6"] = sum(r.get("tracks", 0) for r in rows)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def fetch_recent_tracks(limit: int = 50) -> list[dict]:
     """Return the most recently added tracks ordered by id DESC."""
     params = {
