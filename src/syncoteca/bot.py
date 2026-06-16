@@ -4029,6 +4029,79 @@ async def handle_stop_label_parse(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("🗃️ Ковальски: парсинг сейчас не запущен.")
 
 
+async def handle_sync_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/sync_labels — Sync missing labels from tracks into labels registry."""
+    if not _is_owner(update):
+        return await _deny(update)
+
+    from syncoteca.tools.label_syncer import is_running as _ls_running
+    if _ls_running():
+        await update.message.reply_text("⚠️ Ковальски: синхронизация лейблов уже запущена.")
+        return
+
+    chat_id = update.effective_chat.id
+    bot = update.get_bot()
+    asyncio.create_task(_run_sync_labels_task(chat_id, bot))
+    await update.message.reply_text(
+        "🏷 Ковальски: запускаю синхронизацию лейблов.\n"
+        "Треки → уникальные лейблы → Яндекс за ID → вставка в реестр.\n"
+        "Пауза 10 сек между новыми лейблами. Жди отчёт."
+    )
+
+
+async def _run_sync_labels_task(chat_id: int, bot) -> None:
+    """Background task: sync missing labels and report to Telegram."""
+    import asyncio as _asyncio
+    loop = _asyncio.get_event_loop()
+
+    progress_msg = await bot.send_message(chat_id, "🏷 [0/?] Загружаю треки…")
+    _last_edit = [0.0]
+
+    def _progress(done: int, total: int, info: str) -> None:
+        import time as _t
+        now = _t.monotonic()
+        if now - _last_edit[0] < 5.0:
+            return
+        _last_edit[0] = now
+        _asyncio.run_coroutine_threadsafe(
+            progress_msg.edit_text(f"🏷 [{done}/{total}] {info}"),
+            loop,
+        )
+
+    from syncoteca.tools.label_syncer import sync_labels
+    result = await loop.run_in_executor(None, lambda: sync_labels(progress_cb=_progress))
+
+    try:
+        await progress_msg.delete()
+    except Exception:
+        pass
+
+    if result.get("error"):
+        await bot.send_message(chat_id, f"⚠️ {result['error']}")
+        return
+
+    lines = [
+        "🏷 Ковальски: синхронизация лейблов завершена",
+        f"Треков обработано: {result.get('tracks_total', 0):,}".replace(",", " "),
+        f"Уникальных лейблов: {result.get('labels_unique', 0):,}".replace(",", " "),
+        f"✅ Добавлено: {result.get('added', 0)}",
+        f"— Уже были: {result.get('skipped', 0)}",
+        f"✗ Ошибок: {result.get('errors', 0)}",
+    ]
+    if result.get("cancelled"):
+        lines.append("⚠️ Остановлено вручную")
+
+    added_list = result.get("added_list") or []
+    if added_list:
+        lines.append("\nНовые лейблы:")
+        for item in added_list[:40]:
+            lines.append(f"• {item['name']} (ID: {item['id'] or '—'})")
+        if len(added_list) > 40:
+            lines.append(f"… и ещё {len(added_list) - 40}")
+
+    await bot.send_message(chat_id, "\n".join(lines))
+
+
 async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/stop — clear sticky agent, teach mode, return to coordinator."""
     if not _is_owner(update):
@@ -4061,6 +4134,7 @@ async def post_init(app: Application) -> None:
         BotCommand("teach_stop", "Знания: остановить режим обучения"),
         BotCommand("briefing", "Брифинг задач Asana на сегодня"),
         BotCommand("stats", "Ковальски: статистика базы по лейблам"),
+        BotCommand("sync_labels", "Ковальски: добавить новые лейблы в реестр"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -4092,6 +4166,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("stop_label_parse", handle_stop_label_parse))
     app.add_handler(CommandHandler("export", handle_export))
     app.add_handler(CommandHandler("stats", handle_stats))
+    app.add_handler(CommandHandler("sync_labels", handle_sync_labels))
     app.add_handler(CommandHandler("check_catalog", handle_check_catalog))
     app.add_handler(CommandHandler("export_anomalies", handle_export_anomalies))
     app.add_handler(CommandHandler("asana_debug", handle_asana_debug))
