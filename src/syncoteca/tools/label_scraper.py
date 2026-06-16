@@ -19,11 +19,17 @@ AVG_TRACKS_PER_ALBUM = 10  # rough estimate for ETA
 
 _running: bool = False
 _cancel_requested: bool = False
+_skip_album: bool = False
 
 
 def cancel_scrape() -> None:
     global _cancel_requested
     _cancel_requested = True
+
+
+def skip_current_album() -> None:
+    global _skip_album
+    _skip_album = True
 
 
 def is_running() -> bool:
@@ -214,24 +220,25 @@ def scrape_label(
     progress_cb(albums_done, albums_total, info_str) called after each album.
     Returns {"label_name", "added", "skipped", "errors", "albums_total", "albums_done"}.
     """
-    global _running, _cancel_requested
+    global _running, _cancel_requested, _skip_album
 
     if _running:
         return {"error": "already_running"}
 
     _running = True
     _cancel_requested = False
+    _skip_album = False
     try:
         all_ids = fetch_label_album_ids(label_id)
         if not all_ids:
             return {"label_name": None, "added": 0, "skipped": 0, "errors": 0,
-                    "albums_total": 0, "albums_done": 0}
+                    "albums_total": 0, "albums_done": 0, "albums_skipped": 0}
 
         processed = get_processed_album_ids(label_id)
         to_process = [aid for aid in all_ids if aid not in processed]
 
         label_name = None
-        added = skipped = errors = 0
+        added = skipped = errors = albums_skipped = 0
         ai = -1
 
         cancelled = False
@@ -263,7 +270,11 @@ def scrape_label(
             all_tracks = [t for vol in (album.get("volumes") or []) for t in vol]
 
             track_num = 0
+            album_was_skipped = False
             for track in all_tracks:
+                if _skip_album:
+                    album_was_skipped = True
+                    continue
                 if not track or not track.get("title") or track.get("isRemoved"):
                     continue
                 track_num += 1
@@ -292,6 +303,10 @@ def scrape_label(
                 else:
                     errors += 1
 
+            if album_was_skipped:
+                albums_skipped += 1
+            _skip_album = False  # reset for next album
+
             # Mark album as processed in label_catalog for resume support
             try:
                 _mark_album_processed(label_id, album_id)
@@ -299,7 +314,10 @@ def scrape_label(
                 pass
 
             if progress_cb:
-                info = f"{album_artists} — {album_title} ({track_num} тр.) | +{added} треков всего"
+                if album_was_skipped:
+                    info = f"⏭ {album_artists} — {album_title} (пропущен)"
+                else:
+                    info = f"{album_artists} — {album_title} ({track_num} тр.) | +{added} треков всего"
                 progress_cb(ai + 1, len(to_process), info)
 
         return {
@@ -309,6 +327,7 @@ def scrape_label(
             "errors": errors,
             "albums_total": len(all_ids),
             "albums_done": ai + 1 if to_process else 0,
+            "albums_skipped": albums_skipped,
             "cancelled": cancelled,
         }
     finally:

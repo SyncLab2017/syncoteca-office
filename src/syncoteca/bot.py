@@ -2019,6 +2019,11 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "стоп скрапер", "остановить скрапинг",
     )):
         return "stop_scrape"
+    if any(w in lower for w in (
+        "скип", "скипни", "пропусти", "пропустить", "skip album", "пропусти альбом",
+        "пропустить альбом", "не нужен этот", "не нужно это",
+    )):
+        return "skip_album"
     # Status queries about enrichment must NOT trigger a new enrich run
     if re.search(r'\b(закончил|завершил|уже\s+закончил|ты\s+закончил|готово)\b', lower) and \
        any(w in lower for w in ("обогащени", "обогат", "обогащ", "enrich")):
@@ -2415,7 +2420,7 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
 
         _has_filter = _label_fix or _artist_fix or _date_fix
         m = _re.search(r'\b(\d{1,4})\b', text)
-        limit = min(int(m.group(1)), 2000) if m else (1000 if _has_filter else 500)
+        limit = min(int(m.group(1)), 50000) if m else (5000 if _has_filter else 5000)
         only_null = "all" not in _tl and "все" not in _tl and "корректн" not in _tl and "последн" not in _tl and not _has_filter
 
         from syncoteca.tools.date_fixer import run_date_fix
@@ -2587,6 +2592,14 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             await update.message.reply_text("🗃️ Ковальски: парсинг сейчас не запущен.")
         _PENDING_LABEL_SCRAPE.pop(chat_id, None)
 
+    elif intent == "skip_album":
+        from syncoteca.tools.label_scraper import skip_current_album, is_running
+        if is_running():
+            skip_current_album()
+            await update.message.reply_text("⏭ Ковальски: текущий альбом пропущен, перехожу к следующему.")
+        else:
+            await update.message.reply_text("🗃️ Ковальски: парсинг сейчас не запущен.")
+
 
 async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: str, prefix: str = "") -> None:
     from syncoteca.tools.label_scraper import scrape_label
@@ -2667,12 +2680,30 @@ async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: s
     ]
     if result.get("skipped"):
         lines.append(f"⏭ Пропущено (уже есть): {result['skipped']}")
+    if result.get("albums_skipped"):
+        lines.append(f"⏭ Альбомов пропущено вручную: {result['albums_skipped']}")
     if result.get("errors"):
         lines.append(f"❌ Ошибок: {result['errors']}")
     if cancelled:
         lines.append("💡 Для продолжения: «спарси лейбл» снова — начнёт с того места.")
     lines.append(f"\n{hashtag} #парсинг_лейбла")
     await bot.send_message(chat_id, "\n".join(lines))
+
+    # Auto-chain: enrich → discogs date fix for newly added tracks
+    newly_added = result.get("added", 0)
+    if not cancelled and newly_added > 0:
+        from datetime import date as _date2
+        today_iso = _date2.today().isoformat()  # YYYY-MM-DD
+        chain_limit = min(newly_added + 500, 10000)
+        await bot.send_message(
+            chat_id,
+            f"🔗 Ковальски: запускаю автоцепочку для {newly_added} новых треков\n"
+            f"1/2 — Яндекс обогащение (метаданные)…"
+        )
+        await _run_enrich_task(chat_id, bot, limit=chain_limit, date_from=today_iso)
+        await bot.send_message(chat_id, "🔗 2/2 — Discogs проверка дат…")
+        from syncoteca.tools.date_fixer import run_date_fix as _rdf
+        await _rdf(chat_id, bot, limit=chain_limit, only_null=False, date_from=today_iso)
 
 
 async def _run_multi_label_scrape_task(chat_id: int, bot, labels: list[tuple[str, str]]) -> None:
@@ -3610,11 +3641,11 @@ async def handle_fix_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     from syncoteca.tools.date_fixer import run_date_fix
 
     args = context.args or []
-    limit = 50
+    limit = 5000
     only_null = True
     for a in args:
         if a.isdigit():
-            limit = min(int(a), 500)
+            limit = min(int(a), 50000)
         elif a.lower() == "all":
             only_null = False
 
@@ -3630,13 +3661,13 @@ async def handle_verify_dates(update: Update, context: ContextTypes.DEFAULT_TYPE
     from syncoteca.tools.date_fixer import run_date_fix
 
     args = context.args or []
-    limit = 500
+    limit = 5000
     after_id = 0
     _limit_set = False
     for a in args:
         if a.isdigit():
             if not _limit_set:
-                limit = min(int(a), 2000)
+                limit = min(int(a), 50000)
                 _limit_set = True
             else:
                 after_id = int(a)
