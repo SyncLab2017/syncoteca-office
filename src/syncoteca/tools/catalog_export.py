@@ -512,10 +512,22 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
         except ValueError:
             pass
 
-    params_list = list(params.items()) + date_params
-    r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params_list, timeout=45)
-    r.raise_for_status()
-    rows = r.json()
+    # Supabase project "Max rows" = 1000 — paginate to get all results
+    _PAGE = 1000
+    rows: list[dict] = []
+    _offset = 0
+    while True:
+        _p = dict(params)
+        _p["limit"] = str(_PAGE)
+        _p["offset"] = str(_offset)
+        _pl = list(_p.items()) + date_params
+        r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=_pl, timeout=45)
+        r.raise_for_status()
+        batch = r.json()
+        rows.extend(batch)
+        if len(batch) < _PAGE or len(rows) >= limit:
+            break
+        _offset += _PAGE
 
     # Always post-filter by year: fixes ilike false positives
     # (e.g. release_date="2004-2005" matches *2005* but first year = 2004)
