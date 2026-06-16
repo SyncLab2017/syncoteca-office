@@ -81,9 +81,16 @@ def _zenrows_get(url: str) -> dict:
         "proxy_country": "ru",
         "premium_proxy": "true",
     }
-    r = httpx.get("https://api.zenrows.com/v1/", params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
+    for attempt in range(3):
+        try:
+            r = httpx.get("https://api.zenrows.com/v1/", params=params, timeout=60)
+            r.raise_for_status()
+            return r.json()
+        except httpx.TimeoutException:
+            if attempt == 2:
+                raise
+            time.sleep(5)
+    raise RuntimeError("ZenRows: max retries exceeded")
 
 
 def _extract_ids(link: str) -> Optional[tuple[str, str]]:
