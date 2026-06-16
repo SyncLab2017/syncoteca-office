@@ -2381,19 +2381,19 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         if _lm:
             _label_fix = _lm.group(1).strip()
 
-        # Artist filter: "по артисту X" / "репертуар X" / "релизы X"
+        # Artist filter: "по артисту X" / "репертуар X" / "релизы X" / "по датам релиза X"
         _artist_fix: Optional[str] = None
         if not _label_fix:
             _am = re.search(
-                r"(?:по\s+артисту?|по\s+исполнител[юя]|по\s+групп\w+|по\s+коллектив\w*|артист(?:а|у|ом|е)?\s+|исполнител[яю]\s+|групп[ауе]?\s+|репертуар[еу]?\s+|релизы\s+(?!лейбл))[«\"]?([\w\s\-\.]+?)[»\"]?"
+                r"(?:по\s+артисту?|по\s+исполнител[юя]|по\s+групп\w+|по\s+коллектив\w*|артист(?:а|у|ом|е)?\s+|исполнител[яю]\s+|групп[ауе]?\s+|репертуар[еу]?\s+|релизы\s+(?!лейбл)|по\s+дат(?:ам?|е|ах|ами)?\s+релиз\w*\s+)[«\"]?([\w\s\-\.]+?)[»\"]?"
                 r"(?=\s*(?:[.,!?]|$|\b(?:и|с|по|за|от|до|треки|даты|лейбл)\b))",
                 text, re.IGNORECASE,
             )
             if _am:
                 _artist_fix = _am.group(1).strip()
             else:
-                # Fallback 1: "по датам Name" — bare name after date trigger
-                _dm_artist = re.search(r"по\s+дат(?:ам?|е|ах|ами)?\s+([\w\s\-\.]{2,40})", text, re.IGNORECASE)
+                # Fallback 1: "по датам Name" — bare name after date trigger (skip "релиза/релизов/etc")
+                _dm_artist = re.search(r"по\s+дат(?:ам?|е|ах|ами)?\s+(?:релиз\w*\s+)?([\w\s\-\.]{2,40})", text, re.IGNORECASE)
                 if _dm_artist:
                     _artist_fix = _dm_artist.group(1).strip().rstrip(".,!?")
                 else:
