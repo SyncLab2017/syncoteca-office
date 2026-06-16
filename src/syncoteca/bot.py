@@ -2323,6 +2323,8 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
                 )
                 return
             caption = build_export_caption(tracks, subject)
+            if count > 3000:
+                await thinking.edit_text(f"🗃️ Ковальски: найдено {count} треков, генерирую файл…")
             await thinking.delete()
             try:
                 await update.message.reply_document(
@@ -3718,6 +3720,8 @@ async def handle_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             document=io.BytesIO(xlsx_bytes),
             filename=filename,
             caption=caption,
+            read_timeout=120,
+            write_timeout=120,
         )
         await thinking.delete()
     except Exception as e:

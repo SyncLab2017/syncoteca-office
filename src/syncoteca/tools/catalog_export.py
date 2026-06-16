@@ -685,14 +685,14 @@ def export_catalog(query_text: str) -> tuple[bytes, str, int, list[dict]]:
     Returns (xlsx_bytes, filename, track_count, tracks).
     """
     filters = parse_export_query(query_text)
-    tracks = fetch_tracks(filters)
+    tracks = fetch_tracks(filters, limit=50000)
 
     # Bare-word fallback: artist search returned 0 → retry same term as label.
     # Handles "выгрузи Warner" / "выгрузи monolit" where no "лейбл" keyword given.
     if not tracks and filters.get("artist") and not filters.get("label") and not filters.get("genre"):
         label_filters = {k: v for k, v in filters.items() if k != "artist"}
         label_filters["label"] = filters["artist"]
-        retry = fetch_tracks(label_filters)
+        retry = fetch_tracks(label_filters, limit=50000)
         if retry:
             tracks = retry
             filters = label_filters
