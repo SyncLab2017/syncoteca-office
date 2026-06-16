@@ -52,7 +52,7 @@ def get_tracks_batch(
     date_from       → filter by created_at >= YYYY-MM-DD
     """
     params: dict = {
-        "select": "id,title,artist,release_date,label",
+        "select": "id,title,artist,album,release_date,label",
         "order": "id.asc",
         "limit": str(limit),
     }
@@ -151,6 +151,34 @@ def _discogs_request(params: dict) -> dict | None:
     return None
 
 
+def search_discogs_year_by_album(artist: str, album: str) -> int | None:
+    """Return earliest Discogs release year for artist/album, or None."""
+    if not album:
+        return None
+    sa = _normalize_artist(artist)
+    sa_noyo = sa.replace("ё", "е").replace("Ё", "Е")
+    candidates = [sa] if sa == sa_noyo else [sa, sa_noyo]
+    for search_artist in candidates:
+        for search_type in ("master", "release"):
+            data = _discogs_request({
+                "artist": search_artist,
+                "release_title": album,
+                "type": search_type,
+                "per_page": "5",
+            })
+            if data:
+                y = _extract_min_year(data.get("results", []), search_artist)
+                if y:
+                    return y
+        for search_type in ("master", "release"):
+            data = _discogs_request({"q": f"{search_artist} {album}", "type": search_type, "per_page": "8"})
+            if data:
+                y = _extract_min_year(data.get("results", []), search_artist)
+                if y:
+                    return y
+    return None
+
+
 def search_discogs_year(artist: str, title: str) -> int | None:
     """Return earliest Discogs release year for artist/title, or None."""
     title = title.replace("🔞", "").strip()
@@ -245,16 +273,35 @@ async def run_date_fix(
 
         updated = skipped = not_found = errors = 0
         updated_log: list[str] = []  # "Артист — Трек (старый_год → новый)"
+        # Album-level year cache: (artist, album) → year or None (None = not found on Discogs)
+        _album_cache: dict[tuple[str, str], int | None] = {}
 
         for i, track in enumerate(tracks):
             _artist = track.get("artist") or ""
             title = track.get("title") or ""
+            _album = track.get("album") or ""
             track_id = track.get("id")
             current_date = track.get("release_date")
             current_year = _extract_year(current_date)
+            made_api_call = False
 
             try:
-                year = await loop.run_in_executor(None, search_discogs_year, _artist, title)
+                year: int | None = None
+                cache_key = (_artist, _album) if _album else None
+
+                # 1. Try album-level cache
+                if cache_key is not None:
+                    if cache_key in _album_cache:
+                        year = _album_cache[cache_key]
+                    else:
+                        year = await loop.run_in_executor(None, search_discogs_year_by_album, _artist, _album)
+                        _album_cache[cache_key] = year
+                        made_api_call = True
+
+                # 2. Fallback: search by track title
+                if year is None:
+                    year = await loop.run_in_executor(None, search_discogs_year, _artist, title)
+                    made_api_call = True
 
                 if year is None:
                     await loop.run_in_executor(None, update_track_date, track_id, "not_found")
@@ -274,6 +321,7 @@ async def run_date_fix(
 
             except Exception as e:
                 errors += 1
+                made_api_call = True
                 if "invalid" in str(e).lower():
                     await bot.send_message(chat_id, f"❌ Ковальски: Discogs token недействителен. Остановка.")
                     return
@@ -291,7 +339,9 @@ async def run_date_fix(
                 except Exception:
                     pass
 
-            await asyncio.sleep(_DELAY_S)
+            # Rate-limit: only sleep when a real Discogs request was made
+            if made_api_call:
+                await asyncio.sleep(_DELAY_S)
 
         try:
             await progress_msg.delete()
