@@ -4119,20 +4119,19 @@ async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def post_init(app: Application) -> None:
     commands = [
         BotCommand("start", "Координатор — начать сначала"),
+        BotCommand("briefing", "Брифинг задач Asana на сегодня"),
+        BotCommand("kowalski", "Ковальски (контент, каталог, метаданные)"),
+        BotCommand("enrich", "Ковальски: обогащение треков (Яндекс Музыка)"),
+        BotCommand("parse_label", "Ковальски: парсинг каталога лейбла"),
+        BotCommand("stop_label_parse", "Ковальски: остановить парсинг лейбла"),
+        BotCommand("verify_dates", "Ковальски: перепроверить даты (Discogs)"),
+        BotCommand("sync_labels", "Ковальски: добавить новые лейблы в реестр"),
+        BotCommand("stats", "Ковальски: статистика базы по лейблам"),
         BotCommand("license", "Рико (лицензии, права)"),
-        BotCommand("lawyer", "Ксюша (договоры, юрист)"),
         BotCommand("accountant", "Марина (роялти, бухгалтерия)"),
+        BotCommand("lawyer", "Ксюша (договоры, юрист)"),
         BotCommand("bizdev", "Директор по развитию"),
         BotCommand("dev", "Разработчик"),
-        BotCommand("briefing", "Брифинг задач Asana на сегодня"),
-        # Ковальски — каталог, контент, метаданные (по алфавиту)
-        BotCommand("kowalski", "Ковальски (контент, каталог, метаданные)"),
-        BotCommand("sync_labels", "Ковальски: добавить новые лейблы в реестр"),
-        BotCommand("enrich", "Ковальски: обогащение треков (Яндекс Музыка)"),
-        BotCommand("stop_label_parse", "Ковальски: остановить парсинг лейбла"),
-        BotCommand("parse_label", "Ковальски: парсинг каталога лейбла"),
-        BotCommand("verify_dates", "Ковальски: перепроверить даты (Discogs)"),
-        BotCommand("stats", "Ковальски: статистика базы по лейблам"),
     ]
     await app.bot.set_my_commands(commands)
 
