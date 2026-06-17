@@ -99,13 +99,13 @@ _CYRILLIC = re.compile(r'[а-яёА-ЯЁ]')
 _LATIN = re.compile(r'[a-zA-Z]')
 
 
-def _extract_min_year(results: list, artist_norm: str) -> int | None:
+def _extract_min_year_and_url(results: list, artist_norm: str) -> tuple[int, str] | None:
     a_key = re.sub(r"[^a-zа-яёA-ZА-ЯЁ0-9]", "", artist_norm.lower())
     # Detect script: if artist is Cyrillic but Discogs result artists are Latin (or vice versa),
     # skip artist-match check — can't compare cross-script strings.
     a_is_cyrillic = bool(_CYRILLIC.search(a_key))
     a_is_latin = bool(_LATIN.search(a_key))
-    years = []
+    best: tuple[int, str] | None = None
     for r in results:
         title = r.get("title", "")
         if "various" in title.lower():
@@ -119,8 +119,12 @@ def _extract_min_year(results: list, artist_norm: str) -> int | None:
             continue
         y = r.get("year")
         if y and 1900 < int(y) <= 2030:
-            years.append(int(y))
-    return min(years) if years else None
+            url = r.get("uri", "")
+            if url and not url.startswith("http"):
+                url = f"https://www.discogs.com{url}"
+            if best is None or int(y) < best[0]:
+                best = (int(y), url)
+    return best
 
 
 def _discogs_request(params: dict) -> dict | None:
@@ -151,8 +155,8 @@ def _discogs_request(params: dict) -> dict | None:
     return None
 
 
-def search_discogs_year_by_album(artist: str, album: str) -> int | None:
-    """Return earliest Discogs release year for artist/album, or None."""
+def search_discogs_year_by_album(artist: str, album: str) -> tuple[int, str] | None:
+    """Return (earliest year, source URL) for artist/album from Discogs, or None."""
     if not album:
         return None
     sa = _normalize_artist(artist)
@@ -167,20 +171,20 @@ def search_discogs_year_by_album(artist: str, album: str) -> int | None:
                 "per_page": "5",
             })
             if data:
-                y = _extract_min_year(data.get("results", []), search_artist)
-                if y:
-                    return y
+                result = _extract_min_year_and_url(data.get("results", []), search_artist)
+                if result:
+                    return result
         for search_type in ("master", "release"):
             data = _discogs_request({"q": f"{search_artist} {album}", "type": search_type, "per_page": "8"})
             if data:
-                y = _extract_min_year(data.get("results", []), search_artist)
-                if y:
-                    return y
+                result = _extract_min_year_and_url(data.get("results", []), search_artist)
+                if result:
+                    return result
     return None
 
 
-def search_discogs_year(artist: str, title: str) -> int | None:
-    """Return earliest Discogs release year for artist/title, or None."""
+def search_discogs_year(artist: str, title: str) -> tuple[int, str] | None:
+    """Return (earliest year, source URL) for artist/title from Discogs, or None."""
     title = title.replace("🔞", "").strip()
     sa = _normalize_artist(artist)
     sa_noyo = sa.replace("ё", "е").replace("Ё", "Е")
@@ -190,15 +194,15 @@ def search_discogs_year(artist: str, title: str) -> int | None:
         for search_type in ("master", "release"):
             data = _discogs_request({"artist": search_artist, "track": title, "type": search_type, "per_page": "5"})
             if data:
-                y = _extract_min_year(data.get("results", []), search_artist)
-                if y:
-                    return y
+                result = _extract_min_year_and_url(data.get("results", []), search_artist)
+                if result:
+                    return result
         for search_type in ("master", "release"):
             data = _discogs_request({"q": f"{search_artist} {title}", "type": search_type, "per_page": "8"})
             if data:
-                y = _extract_min_year(data.get("results", []), search_artist)
-                if y:
-                    return y
+                result = _extract_min_year_and_url(data.get("results", []), search_artist)
+                if result:
+                    return result
     return None
 
 
@@ -272,9 +276,9 @@ async def run_date_fix(
         progress_msg = await bot.send_message(chat_id, "⏳ [0/" + str(len(tracks)) + "] Стартую…")
 
         updated = skipped = not_found = errors = 0
-        updated_log: list[str] = []  # "Артист — Трек (старый_год → новый)"
-        # Album-level year cache: (artist, album) → year or None (None = not found on Discogs)
-        _album_cache: dict[tuple[str, str], int | None] = {}
+        updated_log: list[str] = []  # "Артист — Трек (старый_год → новый) — URL"
+        # Album-level cache: (artist, album) → (year, url) | None
+        _album_cache: dict[tuple[str, str], tuple[int, str] | None] = {}
 
         for i, track in enumerate(tracks):
             _artist = track.get("artist") or ""
@@ -287,21 +291,28 @@ async def run_date_fix(
 
             try:
                 year: int | None = None
+                source_url: str = ""
                 cache_key = (_artist, _album) if _album else None
 
                 # 1. Try album-level cache
                 if cache_key is not None:
                     if cache_key in _album_cache:
-                        year = _album_cache[cache_key]
+                        cached = _album_cache[cache_key]
+                        if cached:
+                            year, source_url = cached
                     else:
-                        year = await loop.run_in_executor(None, search_discogs_year_by_album, _artist, _album)
-                        _album_cache[cache_key] = year
+                        res = await loop.run_in_executor(None, search_discogs_year_by_album, _artist, _album)
+                        _album_cache[cache_key] = res
                         made_api_call = True
+                        if res:
+                            year, source_url = res
 
                 # 2. Fallback: search by track title
                 if year is None:
-                    year = await loop.run_in_executor(None, search_discogs_year, _artist, title)
+                    res2 = await loop.run_in_executor(None, search_discogs_year, _artist, title)
                     made_api_call = True
+                    if res2:
+                        year, source_url = res2
 
                 if year is None:
                     await loop.run_in_executor(None, update_track_date, track_id, "not_found")
@@ -310,14 +321,16 @@ async def run_date_fix(
                     if not current_date or current_date == "not_found":
                         await loop.run_in_executor(None, update_track_date, track_id, str(year))
                         updated += 1
-                        updated_log.append(f"• {_artist} — {title} ({year})")
+                        url_part = f"\n  🔗 {source_url}" if source_url else ""
+                        updated_log.append(f"• {_artist} — {title} ({year}){url_part}")
                     else:
                         skipped += 1
                 else:
                     await loop.run_in_executor(None, update_track_date, track_id, str(year))
                     updated += 1
                     old = str(current_year) if current_year else "?"
-                    updated_log.append(f"• {_artist} — {title} ({old} → {year})")
+                    url_part = f"\n  🔗 {source_url}" if source_url else ""
+                    updated_log.append(f"• {_artist} — {title} ({old} → {year}){url_part}")
 
             except Exception as e:
                 errors += 1
@@ -355,12 +368,12 @@ async def run_date_fix(
             f"✅ Обновлено: {updated} | 📊 Обработано: {len(tracks)}",
         ]
         if updated_log:
-            # Telegram message limit ~4096 chars — cap list at 50 entries
-            shown = updated_log[:50]
+            # Telegram message limit ~4096 chars — each entry may have 2 lines (track + URL)
+            shown = updated_log[:30]
             summary_lines.append("\n🎵 Обновлённые треки:")
             summary_lines.extend(shown)
-            if len(updated_log) > 50:
-                summary_lines.append(f"… и ещё {len(updated_log) - 50}")
+            if len(updated_log) > 30:
+                summary_lines.append(f"… и ещё {len(updated_log) - 30}")
         await bot.send_message(chat_id, "\n".join(summary_lines))
 
     finally:
