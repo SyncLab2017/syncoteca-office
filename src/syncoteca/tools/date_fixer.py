@@ -370,16 +370,55 @@ def build_date_fix_excel(records: list[dict]) -> bytes:
     return buf.getvalue()
 
 
+_CURSOR_SESSION = "verify_dates_cursor_{chat_id}"
+
+
+def _load_verify_cursor(chat_id: int) -> int:
+    """Read last processed track ID from Supabase (persists across restarts)."""
+    try:
+        r = httpx.get(
+            f"{_sb_base()}/rest/v1/agent_sessions",
+            headers=_sb_headers(),
+            params={"session_id": f"eq.verify_dates_cursor_{chat_id}", "select": "task_context"},
+            timeout=5,
+        )
+        rows = r.json()
+        if rows:
+            return int(rows[0].get("task_context", {}).get("after_id", 0))
+    except Exception:
+        pass
+    return 0
+
+
+def _save_verify_cursor(chat_id: int, after_id: int) -> None:
+    """Persist last processed track ID to Supabase."""
+    try:
+        httpx.post(
+            f"{_sb_base()}/rest/v1/agent_sessions",
+            headers={**_sb_headers(), "Prefer": "resolution=merge-duplicates"},
+            json={
+                "session_id": f"verify_dates_cursor_{chat_id}",
+                "agent_name": "kowalski",
+                "messages": [],
+                "task_context": {"after_id": after_id},
+            },
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
 async def run_date_fix(
     chat_id: int,
     bot,
     limit: int = 500,
     only_null: bool = False,
-    after_id: int = 0,
+    after_id: int = -1,  # -1 = auto-load from cursor; 0 = explicit start from beginning
     label: Optional[str] = None,
     artist: Optional[str] = None,
     title: Optional[str] = None,
     date_from: Optional[str] = None,
+    reset_cursor: bool = False,
 ) -> None:
     """Background asyncio task: fix Discogs dates and report to Telegram."""
     global _running
@@ -397,8 +436,19 @@ async def run_date_fix(
     _last_updated_tracks[chat_id] = []  # reset for this chat
 
     try:
+        # Full-catalog scan: use persistent cursor unless explicit after_id or filters given
+        _full_scan = not (label or artist or title or date_from or only_null)
+        if reset_cursor and _full_scan:
+            await loop.run_in_executor(None, _save_verify_cursor, chat_id, 0)
+            after_id = 0
+        elif after_id == -1:
+            if _full_scan:
+                after_id = await loop.run_in_executor(None, _load_verify_cursor, chat_id)
+            else:
+                after_id = 0
+
         scope = "только без даты" if only_null else "все треки"
-        scope_note = f" (id > {after_id})" if after_id else ""
+        scope_note = f" (с ID > {after_id})" if after_id else " (с начала)"
         if label:
             scope_note += f" | лейбл: {label}"
         if artist:
@@ -553,10 +603,20 @@ async def run_date_fix(
         import io as _io
         from datetime import date as _date
         today = _date.today().strftime("%d.%m.%Y")
+
+        # Save cursor: last track ID processed in full-scan mode
+        if _full_scan and tracks:
+            last_id = tracks[-1]["id"]
+            await loop.run_in_executor(None, _save_verify_cursor, chat_id, last_id)
+
         summary_lines = [
             f"🗃️ Ковальски: проверка дат завершена — {today}",
             f"✅ Обновлено: {updated} | 📊 Обработано: {len(tracks)}",
         ]
+        if _full_scan and tracks:
+            first_id = tracks[0]["id"]
+            last_id = tracks[-1]["id"]
+            summary_lines[1] += f"\n📍 Блок: ID {first_id}–{last_id} → следующий запуск продолжит с ID {last_id + 1}"
         if updated_log:
             shown = updated_log[:40]
             summary_lines.append("\n🎵 Обновлённые треки:")

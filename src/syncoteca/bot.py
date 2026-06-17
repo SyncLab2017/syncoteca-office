@@ -3830,22 +3830,28 @@ async def handle_fix_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def handle_verify_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/verify_dates [limit] [Артист] [Артист — Трек] [лейбл X] — Check/fix release dates."""
+    """/verify_dates [limit|reset|Артист|Артист — Трек|лейбл X] — Check/fix release dates in blocks."""
     if not _is_owner(update):
         return await _deny(update)
 
-    from syncoteca.tools.date_fixer import run_date_fix
+    from syncoteca.tools.date_fixer import run_date_fix, _load_verify_cursor
     import re as _re
 
     raw = " ".join(context.args or []).strip()
     limit = 5000
-    after_id = 0
     _artist_vd: Optional[str] = None
     _title_vd: Optional[str] = None
     _label_vd: Optional[str] = None
     _only_null_vd = False
+    _reset = False
+    _after_id = -1  # -1 = auto-load cursor
 
-    if raw:
+    chat_id = update.effective_chat.id
+
+    if raw.lower() in ("reset", "сброс", "начало", "start"):
+        _reset = True
+        _after_id = 0
+    elif raw:
         # Extract explicit limit (standalone number)
         _lm = _re.search(r'(?:^|\s)(\d{2,5})(?:\s|$)', raw)
         if _lm:
@@ -3857,18 +3863,29 @@ async def handle_verify_dates(update: Update, context: ContextTypes.DEFAULT_TYPE
         if _llm:
             _label_vd = _llm.group(1).strip()
         elif " — " in raw or " - " in raw:
-            # "Артист — Трек" split on first em/en/hyphen-with-spaces
             _parts = _re.split(r'\s*[—–]\s*|\s+-\s+', raw, maxsplit=1)
             _artist_vd = _parts[0].strip() or None
             _title_vd = _parts[1].strip() if len(_parts) > 1 else None
-        else:
-            _artist_vd = raw or None
+        elif raw:
+            _artist_vd = raw
 
-    chat_id = update.effective_chat.id
+    # Show cursor position for full-scan runs
+    _full_scan = not (_label_vd or _artist_vd or _title_vd or _only_null_vd)
+    if _full_scan and not _reset:
+        loop = asyncio.get_event_loop()
+        current_cursor = await loop.run_in_executor(None, _load_verify_cursor, chat_id)
+        if _after_id == -1:
+            _after_id = current_cursor
+        cursor_note = f"с ID > {current_cursor}" if current_cursor else "с начала каталога"
+        await update.message.reply_text(f"🗃️ Ковальски: запускаю блок ({cursor_note}, лимит {limit})")
+    elif _reset:
+        await update.message.reply_text("🔄 Ковальски: курсор сброшен — следующий запуск начнёт с начала каталога.")
+
     asyncio.create_task(run_date_fix(
         chat_id, context.bot,
-        limit=limit, only_null=_only_null_vd, after_id=after_id,
+        limit=limit, only_null=_only_null_vd, after_id=_after_id,
         label=_label_vd, artist=_artist_vd, title=_title_vd,
+        reset_cursor=_reset,
     ))
 
 
