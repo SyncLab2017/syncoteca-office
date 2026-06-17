@@ -2535,23 +2535,9 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             chat_id, update.get_bot(), limit=limit, only_null=only_null,
             label=_label_fix, artist=_artist_fix, date_from=_date_fix,
         ))
-        if _artist_fix:
-            _scope_desc = f"артист «{_artist_fix}»"
-        elif _label_fix:
-            _scope_desc = f"лейбл «{_label_fix}»"
-        elif _date_fix:
-            _scope_desc = "сегодняшние треки"
-        else:
-            _scope_desc = "только без даты" if only_null else "все треки"
-        reply = (
-            f"🗃️ Ковальски: запускаю проверку дат Discogs\n"
-            f"Область: {_scope_desc} | Лимит: {limit}\n"
-            f"Займёт ~{limit // 60 + 1} мин."
-        )
-        await update.message.reply_text(reply)
         history = DIRECT_SESSIONS["content_manager"][chat_id]
         history.append({"role": "user", "content": text})
-        history.append({"role": "assistant", "content": reply})
+        history.append({"role": "assistant", "content": f"Запускаю проверку дат, лимит {limit}"})
         DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
 
     elif intent == "check_catalog":
@@ -4181,7 +4167,7 @@ async def post_init(app: Application) -> None:
         BotCommand("enrich", "Ковальски: обогащение треков (Яндекс Музыка)"),
         BotCommand("parse_label", "Ковальски: парсинг каталога лейбла"),
         BotCommand("stop_label_parse", "Ковальски: остановить парсинг лейбла"),
-        BotCommand("verify_dates", "Ковальски: перепроверить даты (Discogs)"),
+        BotCommand("verify_dates", "Ковальски: даты релизов (Discogs + MusicBrainz)"),
         BotCommand("sync_labels", "Ковальски: добавить новые лейблы в реестр"),
         BotCommand("stats", "Ковальски: статистика базы по лейблам"),
         BotCommand("license", "Рико (лицензии, права)"),

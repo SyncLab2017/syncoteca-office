@@ -332,15 +332,7 @@ async def run_date_fix(
             scope_note += f" | артист: {artist}"
         if date_from:
             scope_note += f" | с {date_from}"
-        await bot.send_message(
-            chat_id,
-            f"🗃️ Ковальски запускает проверку дат\n"
-            f"Источники: Discogs + MusicBrainz\n"
-            f"Режим: {scope}{scope_note} | Лимит: {limit}\n"
-            f"Скорость: ~2-3 сек/трек → {limit * 2 // 60 + 1} мин",
-        )
-
-        # Fetch batch (sync, runs in executor)
+        # Fetch batch first, then send a single startup message with real count
         tracks = await loop.run_in_executor(
             None,
             lambda: get_tracks_batch(limit, only_null, after_id, label=label, artist=artist, date_from=date_from),
@@ -350,8 +342,14 @@ async def run_date_fix(
             await bot.send_message(chat_id, "✅ Ковальски: треков без даты не найдено — база актуальна.")
             return
 
-        start_msg = await bot.send_message(chat_id, f"📋 Найдено {len(tracks)} треков для проверки. Начинаю…")
-        progress_msg = await bot.send_message(chat_id, "⏳ [0/" + str(len(tracks)) + "] Стартую…")
+        eta_min = len(tracks) * 2 // 60 + 1
+        await bot.send_message(
+            chat_id,
+            f"🗃️ Ковальски: проверка дат — Discogs + MusicBrainz\n"
+            f"Режим: {scope}{scope_note}\n"
+            f"Найдено: {len(tracks)} треков | ~{eta_min} мин",
+        )
+        progress_msg = await bot.send_message(chat_id, f"⏳ [0/{len(tracks)}] Стартую…")
 
         updated = skipped = not_found = errors = 0
         updated_log: list[str] = []  # "Артист — Трек (старый_год → новый) — URL"
