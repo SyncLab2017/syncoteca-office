@@ -237,6 +237,52 @@ def search_discogs_year(artist: str, title: str) -> tuple[int, str] | None:
     return None
 
 
+def search_musicbrainz_year(artist: str, title: str) -> tuple[int, str] | None:
+    """Return (earliest year, MusicBrainz URL) for artist/title, or None.
+
+    Uses the MusicBrainz JSON API (1 req/sec rate limit; we sleep in caller).
+    Good fallback for Soviet/Russian artists absent or mis-dated on Discogs.
+    """
+    sa = _normalize_artist(artist)
+    # Try with and without ё→е substitution
+    sa_noyo = sa.replace("ё", "е").replace("Ё", "Е")
+    title_clean = title.replace("🔞", "").strip()
+    candidates = [sa] if sa == sa_noyo else [sa, sa_noyo]
+
+    for search_artist in candidates:
+        # Lucene query: artist + recording title
+        q = f'artist:"{search_artist}" AND recording:"{title_clean}"'
+        try:
+            r = httpx.get(
+                "https://musicbrainz.org/ws/2/recording",
+                params={"query": q, "fmt": "json", "limit": "10"},
+                headers={"User-Agent": "SynclabDateFixer/1.0 (denis@synclab.pro)"},
+                timeout=15,
+            )
+            if not r.is_success:
+                continue
+            recordings = r.json().get("recordings", [])
+            best_year: int | None = None
+            best_url = ""
+            for rec in recordings:
+                date_str = rec.get("first-release-date", "")
+                if not date_str:
+                    continue
+                m = re.match(r"(\d{4})", date_str)
+                if not m:
+                    continue
+                y = int(m.group(1))
+                if 1900 < y <= 2030 and (best_year is None or y < best_year):
+                    best_year = y
+                    rec_id = rec.get("id", "")
+                    best_url = f"https://musicbrainz.org/recording/{rec_id}" if rec_id else ""
+            if best_year:
+                return (best_year, best_url)
+        except Exception:
+            continue
+    return None
+
+
 def _extract_year(s: str | None) -> int | None:
     if not s:
         return None
@@ -288,9 +334,10 @@ async def run_date_fix(
             scope_note += f" | с {date_from}"
         await bot.send_message(
             chat_id,
-            f"🗃️ Ковальски запускает проверку дат Discogs\n"
+            f"🗃️ Ковальски запускает проверку дат\n"
+            f"Источники: Discogs + MusicBrainz\n"
             f"Режим: {scope}{scope_note} | Лимит: {limit}\n"
-            f"Скорость: ~1 трек/сек → {limit // 60 + 1} мин",
+            f"Скорость: ~2-3 сек/трек → {limit * 2 // 60 + 1} мин",
         )
 
         # Fetch batch (sync, runs in executor)
@@ -338,12 +385,27 @@ async def run_date_fix(
                         if res:
                             year, source_url = res
 
-                # 2. Fallback: search by track title
+                # 2. Fallback: search Discogs by track title
                 if year is None:
                     res2 = await loop.run_in_executor(None, search_discogs_year, _artist, title)
                     made_api_call = True
                     if res2:
                         year, source_url = res2
+
+                # 3. MusicBrainz fallback — fires when Discogs found nothing
+                if year is None and title:
+                    await asyncio.sleep(_DELAY_S)  # MB rate limit 1 req/s
+                    res3 = await loop.run_in_executor(None, search_musicbrainz_year, _artist, title)
+                    made_api_call = True
+                    if res3:
+                        year, source_url = res3
+
+                # 4. Cross-check: if Discogs returned ≥2000, see if MB has earlier date
+                elif year is not None and year >= 2000 and title:
+                    await asyncio.sleep(_DELAY_S)
+                    res3 = await loop.run_in_executor(None, search_musicbrainz_year, _artist, title)
+                    if res3 and res3[0] < year:
+                        year, source_url = res3
 
                 if year is None:
                     await loop.run_in_executor(None, update_track_date, track_id, "not_found")
