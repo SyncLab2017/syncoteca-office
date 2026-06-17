@@ -298,6 +298,25 @@ def _extract_year(s: str | None) -> int | None:
 # Module-level flag to prevent two runs simultaneously
 _running: bool = False
 
+# Stores IDs of tracks updated in the last date-fix run, keyed by chat_id
+_last_updated_ids: dict[int, list[int]] = {}
+
+
+def fetch_tracks_by_ids(ids: list[int]) -> list[dict]:
+    """Fetch full track rows from Supabase for a list of IDs."""
+    if not ids:
+        return []
+    id_list = ",".join(str(i) for i in ids)
+    params = {
+        "select": "id,title,artist,album,label,music_author,lyrics_author,release_date,genre_1,link",
+        "id": f"in.({id_list})",
+        "order": "id.asc",
+        "limit": str(len(ids)),
+    }
+    r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
 
 async def run_date_fix(
     chat_id: int,
@@ -322,6 +341,7 @@ async def run_date_fix(
 
     _running = True
     loop = asyncio.get_event_loop()
+    _last_updated_ids[chat_id] = []  # reset for this chat
 
     try:
         scope = "только без даты" if only_null else "все треки"
@@ -421,12 +441,14 @@ async def run_date_fix(
                     if not current_date or current_date == "not_found":
                         await loop.run_in_executor(None, update_track_date, track_id, str(year))
                         updated += 1
+                        _last_updated_ids[chat_id].append(track_id)
                         updated_log.append(_log_entry(_artist, title, "?", year, source_url))
                     else:
                         skipped += 1
                 else:
                     await loop.run_in_executor(None, update_track_date, track_id, str(year))
                     updated += 1
+                    _last_updated_ids[chat_id].append(track_id)
                     old = str(current_year) if current_year else "?"
                     updated_log.append(_log_entry(_artist, title, old, year, source_url))
 
@@ -472,6 +494,7 @@ async def run_date_fix(
             summary_lines.extend(shown)
             if len(updated_log) > 40:
                 summary_lines.append(f"… и ещё {len(updated_log) - 40}")
+            summary_lines.append(f"\n💾 <i>Напиши «выгрузи обновлённые треки» — пришлю Excel со всеми {updated}.</i>")
         await bot.send_message(chat_id, "\n".join(summary_lines), parse_mode="HTML")
 
     finally:

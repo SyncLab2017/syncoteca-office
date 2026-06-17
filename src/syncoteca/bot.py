@@ -1997,6 +1997,17 @@ def _format_catalog_stats(stats: dict) -> str:
 def _kowalski_detect_intent(text: str) -> str | None:
     """Detect catalog tool intent from natural language. Returns tool name or None."""
     lower = text.lower()
+    # Export of recently date-fixed tracks (must be before generic export check)
+    if any(w in lower for w in ("обновленн", "обновлённ")) and any(w in lower for w in (
+        "выгрузи", "выгрузим", "дай", "скинь", "покажи", "пришли", "excel", "треки", "список"
+    )):
+        return "export_date_updates"
+    if any(w in lower for w in (
+        "результаты проверки дат", "результат проверки дат",
+        "треки которые обновили", "треки с датами", "обновленные по датам", "обновлённые по датам",
+        "что обновил по датам", "что обновилось по датам",
+    )):
+        return "export_date_updates"
     if any(w in lower for w in (
         "выгрузи", "выгрузим", "выгрузите", "выгрузка", "выгружай", "выгрузить", "выгрузку", "выгружать",
         "весь каталог", "полный каталог", "всю базу",
@@ -2349,6 +2360,35 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
     import io
     loop = asyncio.get_event_loop()
     chat_id = update.effective_chat.id
+
+    if intent == "export_date_updates":
+        from syncoteca.tools.date_fixer import _last_updated_ids, fetch_tracks_by_ids
+        ids = _last_updated_ids.get(chat_id, [])
+        if not ids:
+            await update.message.reply_text(
+                "❓ Ковальски: нет данных о последней проверке дат. "
+                "Запусти «проверь даты» — после завершения смогу выгрузить обновлённые."
+            )
+            return
+        thinking = await update.message.reply_text(f"🗃️ Ковальски: формирую Excel для {len(ids)} обновлённых треков…")
+        try:
+            from syncoteca.tools.catalog_export import build_excel, build_export_caption
+            tracks = await loop.run_in_executor(None, fetch_tracks_by_ids, ids)
+            xlsx_bytes = await loop.run_in_executor(None, build_excel, tracks, "Обновлённые даты — Ковальски")
+            from datetime import date as _dt
+            filename = f"date_updates_{_dt.today().strftime('%Y%m%d')}.xlsx"
+            caption = build_export_caption(tracks, f"Обновлённые даты ({len(tracks)} треков)")
+            await thinking.delete()
+            await update.message.reply_document(
+                document=io.BytesIO(xlsx_bytes),
+                filename=filename,
+                caption=caption,
+                read_timeout=60,
+                write_timeout=60,
+            )
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка: {e}")
+        return
 
     if intent == "export":
         thinking = await update.message.reply_text("🗃️ Ковальски: формирую Excel…")
