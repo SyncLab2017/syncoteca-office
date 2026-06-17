@@ -407,6 +407,12 @@ async def run_date_fix(
                     if res3 and res3[0] < year:
                         year, source_url = res3
 
+                def _h(s: str) -> str:
+                    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+                def _year_link(y: int, url: str) -> str:
+                    return f'<a href="{url}">{y}</a>' if url else str(y)
+
                 if year is None:
                     await loop.run_in_executor(None, update_track_date, track_id, "not_found")
                     not_found += 1
@@ -414,16 +420,18 @@ async def run_date_fix(
                     if not current_date or current_date == "not_found":
                         await loop.run_in_executor(None, update_track_date, track_id, str(year))
                         updated += 1
-                        url_part = f"\n  🔗 {source_url}" if source_url else ""
-                        updated_log.append(f"• {_artist} — {title} ({year}){url_part}")
+                        updated_log.append(
+                            f"• {_h(_artist)} — {_h(title)} (? → {_year_link(year, source_url)})"
+                        )
                     else:
                         skipped += 1
                 else:
                     await loop.run_in_executor(None, update_track_date, track_id, str(year))
                     updated += 1
                     old = str(current_year) if current_year else "?"
-                    url_part = f"\n  🔗 {source_url}" if source_url else ""
-                    updated_log.append(f"• {_artist} — {title} ({old} → {year}){url_part}")
+                    updated_log.append(
+                        f"• {_h(_artist)} — {_h(title)} ({old} → {_year_link(year, source_url)})"
+                    )
 
             except Exception as e:
                 errors += 1
@@ -467,7 +475,7 @@ async def run_date_fix(
             summary_lines.extend(shown)
             if len(updated_log) > 30:
                 summary_lines.append(f"… и ещё {len(updated_log) - 30}")
-        await bot.send_message(chat_id, "\n".join(summary_lines))
+        await bot.send_message(chat_id, "\n".join(summary_lines), parse_mode="HTML")
 
     finally:
         _running = False

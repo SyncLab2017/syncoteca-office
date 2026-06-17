@@ -2012,9 +2012,14 @@ def _kowalski_detect_intent(text: str) -> str | None:
     import re as _re
     if _re.search(r'(?:делай|сделай|повтори|дай|покажи|сформируй)\s+(?:ещё\s+раз\s+)?репертуар', lower):
         return "export"
-    # Manual date correction: "поправь/исправь дату X — Y на YYYY"
+    # Manual date correction
     import re as _re_kd
     if _re_kd.search(r'(?:поправь|исправь|измени|установи|поставь|впиши|задай)\s+дату', lower):
+        return "patch_date"
+    # "Артист — Трек - 1965 год - запиши" or "... год запиши/обнови/записать"
+    if _re_kd.search(r'\b(19\d{2}|20[0-2]\d)\b', text) and any(w in lower for w in (
+        "запиши", "запиши дату", "обнови дату", "поставь дату", "год запиши", "год -"
+    )) and _re_kd.search(r'[—–\-]', text):
         return "patch_date"
     if any(w in lower for w in (
         "проверь даты", "обнови даты", "discogs", "дата дискогс",
@@ -2434,15 +2439,27 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             await update.message.reply_text(reply)
             return
         new_year = _ym.group(1)
-        # Extract "Artist — Track" (dash variants) or just artist
-        _sep = _re_pd.search(r'[«"\'"]?(.+?)[»"\'"]?\s*[—\-–]+\s*[«"\'"]?(.+?)[»"\'"]?\s+(?:на|год|=)\s*' + new_year, text, re.IGNORECASE)
-        if _sep:
-            _q_artist, _q_title = _sep.group(1).strip(), _sep.group(2).strip()
+
+        # Strip everything from the year onwards (год, запиши, etc.)
+        _before = text[:_ym.start()].strip()
+        # Remove bullet markers from report format "• "
+        _before = _re_pd.sub(r'^[•\-\s]+', '', _before).strip()
+        # Remove "поправь/исправь дату" prefix
+        _before = _re_pd.sub(r'^(?:поправь|исправь|измени|установи|поставь|впиши|задай)\s+дату\s*', '', _before, flags=re.IGNORECASE).strip()
+        # Remove trailing "- " or "– " before year (format: "Трек - 1965")
+        _before = _before.rstrip('–—-– ').strip()
+        # Remove trailing "на" / "="
+        _before = _re_pd.sub(r'\s+(?:на|=)$', '', _before).strip()
+        # Remove "(OLD →" suffix from report format "Трек (2021 →"
+        _before = _re_pd.sub(r'\s*\(\??[\d?]+\s*[→>]\s*$', '', _before).strip()
+
+        # Split on last em-dash/ndash/hyphen-with-spaces to get artist and title
+        _m2 = _re_pd.search(r'^(.+?)\s*[—–]\s*(.+)$', _before)
+        if _m2:
+            _q_artist, _q_title = _m2.group(1).strip(), _m2.group(2).strip()
         else:
-            # fallback: text between trigger word and "на YYYY"
-            _fb = _re_pd.search(r'дату\s+(.+?)\s+(?:на|=)\s*' + new_year, text, re.IGNORECASE)
-            _q_artist = _fb.group(1).strip() if _fb else ""
-            _q_title = ""
+            _q_artist, _q_title = _before.strip(), ""
+
         if not _q_artist:
             reply = "❓ Не понял, какой трек. Пример: «поправь дату ВИА Пламя — Снег кружится на 1982»"
             await update.message.reply_text(reply)
