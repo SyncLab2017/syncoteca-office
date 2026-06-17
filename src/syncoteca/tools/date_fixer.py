@@ -413,6 +413,13 @@ async def run_date_fix(
                 def _year_link(y: int, url: str) -> str:
                     return f'<a href="{url}">{y}</a>' if url else str(y)
 
+                def _log_entry(artist: str, track: str, old: str, y: int, url: str) -> str:
+                    # Line 1: human-readable with clickable year
+                    line1 = f"• {_h(artist)} — {_h(track)} ({old} → {_year_link(y, url)})"
+                    # Line 2: <code> block — tap to copy, paste back to bot to correct
+                    line2 = f"<code>{artist} — {track} - {y} год - запиши</code>"
+                    return f"{line1}\n{line2}"
+
                 if year is None:
                     await loop.run_in_executor(None, update_track_date, track_id, "not_found")
                     not_found += 1
@@ -420,18 +427,14 @@ async def run_date_fix(
                     if not current_date or current_date == "not_found":
                         await loop.run_in_executor(None, update_track_date, track_id, str(year))
                         updated += 1
-                        updated_log.append(
-                            f"• {_h(_artist)} — {_h(title)} (? → {_year_link(year, source_url)})"
-                        )
+                        updated_log.append(_log_entry(_artist, title, "?", year, source_url))
                     else:
                         skipped += 1
                 else:
                     await loop.run_in_executor(None, update_track_date, track_id, str(year))
                     updated += 1
                     old = str(current_year) if current_year else "?"
-                    updated_log.append(
-                        f"• {_h(_artist)} — {_h(title)} ({old} → {_year_link(year, source_url)})"
-                    )
+                    updated_log.append(_log_entry(_artist, title, old, year, source_url))
 
             except Exception as e:
                 errors += 1
@@ -470,12 +473,12 @@ async def run_date_fix(
             f"✅ Обновлено: {updated} | 📊 Обработано: {len(tracks)}",
         ]
         if updated_log:
-            # Telegram message limit ~4096 chars — each entry may have 2 lines (track + URL)
-            shown = updated_log[:30]
-            summary_lines.append("\n🎵 Обновлённые треки:")
+            # Each entry = 2 lines (display + code block) → cap at 15 to stay under 4096 chars
+            shown = updated_log[:15]
+            summary_lines.append("\n🎵 Обновлённые треки (нажми на строку — скопируется команда):")
             summary_lines.extend(shown)
-            if len(updated_log) > 30:
-                summary_lines.append(f"… и ещё {len(updated_log) - 30}")
+            if len(updated_log) > 15:
+                summary_lines.append(f"… и ещё {len(updated_log) - 15}")
         await bot.send_message(chat_id, "\n".join(summary_lines), parse_mode="HTML")
 
     finally:
