@@ -2362,22 +2362,20 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
     chat_id = update.effective_chat.id
 
     if intent == "export_date_updates":
-        from syncoteca.tools.date_fixer import _last_updated_ids, fetch_tracks_by_ids
-        ids = _last_updated_ids.get(chat_id, [])
-        if not ids:
+        from syncoteca.tools.date_fixer import _last_updated_tracks, build_date_fix_excel
+        records = _last_updated_tracks.get(chat_id, [])
+        if not records:
             await update.message.reply_text(
                 "❓ Ковальски: нет данных о последней проверке дат. "
-                "Запусти «проверь даты» — после завершения смогу выгрузить обновлённые."
+                "Запусти «проверь даты» — Excel придёт автоматически после завершения."
             )
             return
-        thinking = await update.message.reply_text(f"🗃️ Ковальски: формирую Excel для {len(ids)} обновлённых треков…")
+        thinking = await update.message.reply_text(f"🗃️ Ковальски: формирую Excel для {len(records)} обновлённых треков…")
         try:
-            from syncoteca.tools.catalog_export import build_excel, build_export_caption
-            tracks = await loop.run_in_executor(None, fetch_tracks_by_ids, ids)
-            xlsx_bytes = await loop.run_in_executor(None, build_excel, tracks, "Обновлённые даты — Ковальски")
+            xlsx_bytes = await loop.run_in_executor(None, build_date_fix_excel, records)
             from datetime import date as _dt
             filename = f"date_updates_{_dt.today().strftime('%Y%m%d')}.xlsx"
-            caption = build_export_caption(tracks, f"Обновлённые даты ({len(tracks)} треков)")
+            caption = f"📊 Ковальски: {len(records)} треков с обновлёнными датами"
             await thinking.delete()
             await update.message.reply_document(
                 document=io.BytesIO(xlsx_bytes),

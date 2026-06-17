@@ -55,7 +55,7 @@ def get_tracks_batch(
     date_from       → filter by created_at >= YYYY-MM-DD
     """
     base_params: dict = {
-        "select": "id,title,artist,album,release_date,label",
+        "select": "id,title,artist,album,release_date,label,link",
         "order": "id.asc",
     }
     if only_null:
@@ -298,24 +298,72 @@ def _extract_year(s: str | None) -> int | None:
 # Module-level flag to prevent two runs simultaneously
 _running: bool = False
 
-# Stores IDs of tracks updated in the last date-fix run, keyed by chat_id
-_last_updated_ids: dict[int, list[int]] = {}
+# Stores updated track records from the last date-fix run, keyed by chat_id.
+# Each record: {artist, title, album, label, genre_1, link, old_date, new_date, source_url}
+_last_updated_tracks: dict[int, list[dict]] = {}
 
 
-def fetch_tracks_by_ids(ids: list[int]) -> list[dict]:
-    """Fetch full track rows from Supabase for a list of IDs."""
-    if not ids:
-        return []
-    id_list = ",".join(str(i) for i in ids)
-    params = {
-        "select": "id,title,artist,album,label,music_author,lyrics_author,release_date,genre_1,link",
-        "id": f"in.({id_list})",
-        "order": "id.asc",
-        "limit": str(len(ids)),
-    }
-    r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=15)
-    r.raise_for_status()
-    return r.json()
+def build_date_fix_excel(records: list[dict]) -> bytes:
+    """Build Excel with before/after dates for updated tracks. Returns bytes."""
+    import io
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Обновлённые даты"
+
+    header_fill = PatternFill(start_color="1F2D3D", end_color="1F2D3D", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True, size=11)
+
+    columns = [
+        ("№", 5),
+        ("Исполнитель", 30),
+        ("Название", 40),
+        ("Было", 10),
+        ("Стало", 10),
+        ("Источник", 12),
+        ("Лейбл", 25),
+        ("Альбом", 30),
+        ("Ссылка", 40),
+    ]
+    for col_idx, (col_name, col_width) in enumerate(columns, 1):
+        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[get_column_letter(col_idx)].width = col_width
+    ws.row_dimensions[1].height = 20
+    ws.freeze_panes = "A2"
+
+    link_font = Font(color="2563EB", underline="single")
+    for idx, rec in enumerate(records, 1):
+        row = idx + 1
+        ws.cell(row=row, column=1, value=idx)
+        ws.cell(row=row, column=2, value=rec.get("artist", ""))
+        ws.cell(row=row, column=3, value=rec.get("title", ""))
+        ws.cell(row=row, column=4, value=rec.get("old_date") or "?")
+        ws.cell(row=row, column=5, value=rec.get("new_date", ""))
+        src = rec.get("source_url", "")
+        if src:
+            src_name = "Discogs" if "discogs" in src else ("MB" if "musicbrainz" in src else "Ссылка")
+            cell = ws.cell(row=row, column=6, value=src_name)
+            cell.hyperlink = src
+            cell.font = link_font
+        ws.cell(row=row, column=7, value=rec.get("label", ""))
+        ws.cell(row=row, column=8, value=rec.get("album", ""))
+        ym = rec.get("link", "")
+        if ym:
+            cell = ws.cell(row=row, column=9, value="Яндекс Музыка")
+            cell.hyperlink = ym
+            cell.font = link_font
+        else:
+            ws.cell(row=row, column=9, value="")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 async def run_date_fix(
@@ -341,7 +389,7 @@ async def run_date_fix(
 
     _running = True
     loop = asyncio.get_event_loop()
-    _last_updated_ids[chat_id] = []  # reset for this chat
+    _last_updated_tracks[chat_id] = []  # reset for this chat
 
     try:
         scope = "только без даты" if only_null else "все треки"
@@ -434,6 +482,15 @@ async def run_date_fix(
                 def _log_entry(artist: str, track: str, old: str, y: int, url: str) -> str:
                     return f"• {_h(artist)} — {_h(track)} ({old} → {_year_link(y, url)})"
 
+                def _store_update(old_d, new_d, url):
+                    _last_updated_tracks[chat_id].append({
+                        "artist": _artist, "title": title,
+                        "album": _album, "label": track.get("label", ""),
+                        "link": track.get("link", ""),
+                        "old_date": old_d, "new_date": new_d,
+                        "source_url": url,
+                    })
+
                 if year is None:
                     await loop.run_in_executor(None, update_track_date, track_id, "not_found")
                     not_found += 1
@@ -441,15 +498,15 @@ async def run_date_fix(
                     if not current_date or current_date == "not_found":
                         await loop.run_in_executor(None, update_track_date, track_id, str(year))
                         updated += 1
-                        _last_updated_ids[chat_id].append(track_id)
+                        _store_update("?", str(year), source_url)
                         updated_log.append(_log_entry(_artist, title, "?", year, source_url))
                     else:
                         skipped += 1
                 else:
                     await loop.run_in_executor(None, update_track_date, track_id, str(year))
                     updated += 1
-                    _last_updated_ids[chat_id].append(track_id)
                     old = str(current_year) if current_year else "?"
+                    _store_update(old, str(year), source_url)
                     updated_log.append(_log_entry(_artist, title, old, year, source_url))
 
             except Exception as e:
@@ -482,6 +539,7 @@ async def run_date_fix(
         except Exception:
             pass
 
+        import io as _io
         from datetime import date as _date
         today = _date.today().strftime("%d.%m.%Y")
         summary_lines = [
@@ -494,8 +552,25 @@ async def run_date_fix(
             summary_lines.extend(shown)
             if len(updated_log) > 40:
                 summary_lines.append(f"… и ещё {len(updated_log) - 40}")
-            summary_lines.append(f"\n💾 <i>Напиши «выгрузи обновлённые треки» — пришлю Excel со всеми {updated}.</i>")
         await bot.send_message(chat_id, "\n".join(summary_lines), parse_mode="HTML")
+
+        # Auto-send Excel with all updated tracks
+        updated_recs = _last_updated_tracks.get(chat_id, [])
+        if updated_recs:
+            try:
+                xlsx = await loop.run_in_executor(None, build_date_fix_excel, updated_recs)
+                filename = f"date_updates_{today.replace('.', '')}.xlsx"
+                caption = f"📊 Ковальски: {len(updated_recs)} треков с обновлёнными датами"
+                await bot.send_document(
+                    chat_id,
+                    document=_io.BytesIO(xlsx),
+                    filename=filename,
+                    caption=caption,
+                    read_timeout=60,
+                    write_timeout=60,
+                )
+            except Exception as _xe:
+                await bot.send_message(chat_id, f"⚠️ Excel не удалось сформировать: {_xe}")
 
     finally:
         _running = False
