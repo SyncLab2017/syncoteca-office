@@ -412,11 +412,7 @@ async def run_date_fix(
                     return f'<a href="{url}">{y}</a>' if url else str(y)
 
                 def _log_entry(artist: str, track: str, old: str, y: int, url: str) -> str:
-                    # Line 1: human-readable with clickable year
-                    line1 = f"• {_h(artist)} — {_h(track)} ({old} → {_year_link(y, url)})"
-                    # Line 2: <code> block — tap to copy, paste back to bot to correct
-                    line2 = f"<code>{artist} — {track} - {y} год - запиши</code>"
-                    return f"{line1}\n{line2}"
+                    return f"• {_h(artist)} — {_h(track)} ({old} → {_year_link(y, url)})"
 
                 if year is None:
                     await loop.run_in_executor(None, update_track_date, track_id, "not_found")
@@ -471,12 +467,11 @@ async def run_date_fix(
             f"✅ Обновлено: {updated} | 📊 Обработано: {len(tracks)}",
         ]
         if updated_log:
-            # Each entry = 2 lines (display + code block) → cap at 15 to stay under 4096 chars
-            shown = updated_log[:15]
-            summary_lines.append("\n🎵 Обновлённые треки (нажми на строку — скопируется команда):")
+            shown = updated_log[:40]
+            summary_lines.append("\n🎵 Обновлённые треки:")
             summary_lines.extend(shown)
-            if len(updated_log) > 15:
-                summary_lines.append(f"… и ещё {len(updated_log) - 15}")
+            if len(updated_log) > 40:
+                summary_lines.append(f"… и ещё {len(updated_log) - 40}")
         await bot.send_message(chat_id, "\n".join(summary_lines), parse_mode="HTML")
 
     finally:
