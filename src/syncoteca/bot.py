@@ -2565,8 +2565,9 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
 
         _has_filter = _label_fix or _artist_fix or _date_fix
         m = _re.search(r'\b(\d{1,4})\b', text)
-        limit = min(int(m.group(1)), 50000) if m else (5000 if _has_filter else 5000)
-        only_null = "all" not in _tl and "все" not in _tl and "корректн" not in _tl and "последн" not in _tl and not _has_filter
+        limit = min(int(m.group(1)), 50000) if m else 5000
+        # only_null=True only when user explicitly asks for tracks without dates
+        only_null = any(w in _tl for w in ("без даты", "без дат", "нет дат", "только без"))
 
         from syncoteca.tools.date_fixer import run_date_fix
         asyncio.create_task(run_date_fix(
@@ -3817,44 +3818,58 @@ async def handle_fix_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     args = context.args or []
     limit = 5000
-    only_null = True
+    only_null = False
     for a in args:
         if a.isdigit():
             limit = min(int(a), 50000)
-        elif a.lower() == "all":
-            only_null = False
+        elif a.lower() in ("null", "empty", "без_даты"):
+            only_null = True
 
     chat_id = update.effective_chat.id
     asyncio.create_task(run_date_fix(chat_id, context.bot, limit=limit, only_null=only_null))
 
 
 async def handle_verify_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/verify_dates [limit] [after_id] — Re-check tracks with existing dates against Discogs."""
+    """/verify_dates [limit] [Артист] [Артист — Трек] [лейбл X] — Check/fix release dates."""
     if not _is_owner(update):
         return await _deny(update)
 
     from syncoteca.tools.date_fixer import run_date_fix
+    import re as _re
 
-    args = context.args or []
+    raw = " ".join(context.args or []).strip()
     limit = 5000
     after_id = 0
-    _limit_set = False
-    for a in args:
-        if a.isdigit():
-            if not _limit_set:
-                limit = min(int(a), 50000)
-                _limit_set = True
-            else:
-                after_id = int(a)
+    _artist_vd: Optional[str] = None
+    _title_vd: Optional[str] = None
+    _label_vd: Optional[str] = None
+    _only_null_vd = False
+
+    if raw:
+        # Extract explicit limit (standalone number)
+        _lm = _re.search(r'(?:^|\s)(\d{2,5})(?:\s|$)', raw)
+        if _lm:
+            limit = min(int(_lm.group(1)), 50000)
+            raw = (raw[:_lm.start()] + raw[_lm.end():]).strip()
+
+        # "лейбл X" / "label X"
+        _llm = _re.search(r'(?:лейбл|label)\s+(.+)', raw, _re.IGNORECASE)
+        if _llm:
+            _label_vd = _llm.group(1).strip()
+        elif " — " in raw or " - " in raw:
+            # "Артист — Трек" split on first em/en/hyphen-with-spaces
+            _parts = _re.split(r'\s*[—–]\s*|\s+-\s+', raw, maxsplit=1)
+            _artist_vd = _parts[0].strip() or None
+            _title_vd = _parts[1].strip() if len(_parts) > 1 else None
+        else:
+            _artist_vd = raw or None
 
     chat_id = update.effective_chat.id
-    after_note = f" (id > {after_id})" if after_id else ""
-    await update.message.reply_text(
-        f"🗃️ Ковальски: запускаю перепроверку дат через Discogs.\n"
-        f"Режим: все треки включая уже с датой — ищу более ранние.{after_note}\n"
-        f"Лимит: {limit} | Займёт ~{limit // 60 + 1} мин."
-    )
-    asyncio.create_task(run_date_fix(chat_id, context.bot, limit=limit, only_null=False, after_id=after_id))
+    asyncio.create_task(run_date_fix(
+        chat_id, context.bot,
+        limit=limit, only_null=_only_null_vd, after_id=after_id,
+        label=_label_vd, artist=_artist_vd, title=_title_vd,
+    ))
 
 
 async def handle_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

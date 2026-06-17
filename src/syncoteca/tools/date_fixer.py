@@ -40,18 +40,20 @@ _PAGE = 1000  # Supabase Max Rows per request
 
 def get_tracks_batch(
     limit: int = 500,
-    only_null: bool = True,
+    only_null: bool = False,
     after_id: int = 0,
     label: Optional[str] = None,
     artist: Optional[str] = None,
+    title: Optional[str] = None,
     date_from: Optional[str] = None,
 ) -> list[dict]:
     """Return up to `limit` tracks to process from Supabase (paginated).
 
-    only_null=True  → WHERE release_date IS NULL  (unprocessed tracks)
+    only_null=True  → WHERE release_date IS NULL  (unprocessed tracks only)
     only_null=False → all tracks, id > after_id  (full re-verification)
     label           → filter by label name (ilike)
     artist          → filter by artist name (ilike)
+    title           → filter by track title (ilike)
     date_from       → filter by created_at >= YYYY-MM-DD
     """
     base_params: dict = {
@@ -64,6 +66,8 @@ def get_tracks_batch(
         base_params["label"] = f"ilike.*{label}*"
     if artist:
         base_params["artist"] = f"ilike.*{artist}*"
+    if title:
+        base_params["title"] = f"ilike.*{title}*"
     if date_from:
         base_params["created_at"] = f"gte.{date_from}T00:00:00"
 
@@ -370,10 +374,11 @@ async def run_date_fix(
     chat_id: int,
     bot,
     limit: int = 500,
-    only_null: bool = True,
+    only_null: bool = False,
     after_id: int = 0,
     label: Optional[str] = None,
     artist: Optional[str] = None,
+    title: Optional[str] = None,
     date_from: Optional[str] = None,
 ) -> None:
     """Background asyncio task: fix Discogs dates and report to Telegram."""
@@ -398,16 +403,22 @@ async def run_date_fix(
             scope_note += f" | лейбл: {label}"
         if artist:
             scope_note += f" | артист: {artist}"
+        if title:
+            scope_note += f" | трек: {title}"
         if date_from:
             scope_note += f" | с {date_from}"
         # Fetch batch first, then send a single startup message with real count
         tracks = await loop.run_in_executor(
             None,
-            lambda: get_tracks_batch(limit, only_null, after_id, label=label, artist=artist, date_from=date_from),
+            lambda: get_tracks_batch(limit, only_null, after_id, label=label, artist=artist, title=title, date_from=date_from),
         )
 
         if not tracks:
-            await bot.send_message(chat_id, "✅ Ковальски: треков без даты не найдено — база актуальна.")
+            no_found_msg = "✅ Ковальски: треков не найдено"
+            if artist or label or title:
+                filters_str = " | ".join(filter(None, [artist, label, title]))
+                no_found_msg += f" по фильтру: {filters_str}"
+            await bot.send_message(chat_id, no_found_msg)
             return
 
         eta_min = len(tracks) * 2 // 60 + 1
