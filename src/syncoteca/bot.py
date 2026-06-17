@@ -2012,6 +2012,10 @@ def _kowalski_detect_intent(text: str) -> str | None:
     import re as _re
     if _re.search(r'(?:делай|сделай|повтори|дай|покажи|сформируй)\s+(?:ещё\s+раз\s+)?репертуар', lower):
         return "export"
+    # Manual date correction: "поправь/исправь дату X — Y на YYYY"
+    import re as _re_kd
+    if _re_kd.search(r'(?:поправь|исправь|измени|установи|поставь|впиши|задай)\s+дату', lower):
+        return "patch_date"
     if any(w in lower for w in (
         "проверь даты", "обнови даты", "discogs", "дата дискогс",
         "треки без даты", "проверить даты", "fix_dates", "fix dates",
@@ -2420,6 +2424,42 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             )
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка: {e}")
+
+    elif intent == "patch_date":
+        import re as _re_pd
+        # Extract year: any 4-digit year 1900-2030
+        _ym = _re_pd.search(r'\b(19\d{2}|20[0-2]\d)\b', text)
+        if not _ym:
+            reply = "❓ Не вижу год. Пример: «поправь дату ВИА Пламя — Снег кружится на 1982»"
+            await update.message.reply_text(reply)
+            return
+        new_year = _ym.group(1)
+        # Extract "Artist — Track" (dash variants) or just artist
+        _sep = _re_pd.search(r'[«"\'"]?(.+?)[»"\'"]?\s*[—\-–]+\s*[«"\'"]?(.+?)[»"\'"]?\s+(?:на|год|=)\s*' + new_year, text, re.IGNORECASE)
+        if _sep:
+            _q_artist, _q_title = _sep.group(1).strip(), _sep.group(2).strip()
+        else:
+            # fallback: text between trigger word and "на YYYY"
+            _fb = _re_pd.search(r'дату\s+(.+?)\s+(?:на|=)\s*' + new_year, text, re.IGNORECASE)
+            _q_artist = _fb.group(1).strip() if _fb else ""
+            _q_title = ""
+        if not _q_artist:
+            reply = "❓ Не понял, какой трек. Пример: «поправь дату ВИА Пламя — Снег кружится на 1982»"
+            await update.message.reply_text(reply)
+            return
+        from syncoteca.tools.date_fixer import patch_track_date_by_search
+        loop = asyncio.get_event_loop()
+        count = await loop.run_in_executor(None, patch_track_date_by_search, _q_artist, _q_title, new_year)
+        if count == 0:
+            reply = f"❌ Ковальски: треки не найдены. Проверь написание:\nАртист: «{_q_artist}»\nТрек: «{_q_title}»"
+        else:
+            who = f"{_q_artist} — {_q_title}" if _q_title else _q_artist
+            reply = f"✅ Ковальски: обновил дату для {count} трек(а)\n🎵 {who}\n📅 Новая дата: {new_year}"
+        await update.message.reply_text(reply)
+        history = DIRECT_SESSIONS["content_manager"][chat_id]
+        history.append({"role": "user", "content": text})
+        history.append({"role": "assistant", "content": reply})
+        DIRECT_SESSIONS["content_manager"][chat_id] = history[-60:]
 
     elif intent == "fix_dates":
         import re as _re

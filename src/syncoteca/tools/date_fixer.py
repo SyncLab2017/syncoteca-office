@@ -35,6 +35,9 @@ def _sb_base() -> str:
     return os.getenv("SUPABASE_URL", "").rstrip("/")
 
 
+_PAGE = 1000  # Supabase Max Rows per request
+
+
 def get_tracks_batch(
     limit: int = 500,
     only_null: bool = True,
@@ -43,7 +46,7 @@ def get_tracks_batch(
     artist: Optional[str] = None,
     date_from: Optional[str] = None,
 ) -> list[dict]:
-    """Return up to `limit` tracks to process from Supabase.
+    """Return up to `limit` tracks to process from Supabase (paginated).
 
     only_null=True  → WHERE release_date IS NULL  (unprocessed tracks)
     only_null=False → all tracks, id > after_id  (full re-verification)
@@ -51,25 +54,53 @@ def get_tracks_batch(
     artist          → filter by artist name (ilike)
     date_from       → filter by created_at >= YYYY-MM-DD
     """
-    params: dict = {
+    base_params: dict = {
         "select": "id,title,artist,album,release_date,label",
         "order": "id.asc",
-        "limit": str(limit),
     }
     if only_null:
-        params["release_date"] = "is.null"
-    if after_id:
-        params["id"] = f"gt.{after_id}"
+        base_params["release_date"] = "is.null"
     if label:
-        params["label"] = f"ilike.*{label}*"
+        base_params["label"] = f"ilike.*{label}*"
     if artist:
-        params["artist"] = f"ilike.*{artist}*"
+        base_params["artist"] = f"ilike.*{artist}*"
     if date_from:
-        params["created_at"] = f"gte.{date_from}T00:00:00"
+        base_params["created_at"] = f"gte.{date_from}T00:00:00"
 
+    all_rows: list[dict] = []
+    # Use cursor pagination by id — more reliable than offset for large tables
+    current_after_id = after_id
+    while len(all_rows) < limit:
+        page_limit = min(_PAGE, limit - len(all_rows))
+        params = {**base_params, "limit": str(page_limit), "id": f"gt.{current_after_id}"}
+        r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=10)
+        r.raise_for_status()
+        batch = r.json()
+        if not batch:
+            break
+        all_rows.extend(batch)
+        if len(batch) < page_limit:
+            break
+        current_after_id = batch[-1]["id"]
+    return all_rows
+
+
+def patch_track_date_by_search(artist_q: str, title_q: str, new_year: str) -> int:
+    """Find tracks matching artist+title (ilike) and set release_date. Returns count updated."""
+    params = {
+        "select": "id",
+        "artist": f"ilike.*{artist_q}*",
+        "title": f"ilike.*{title_q}*",
+        "limit": "10",
+    }
     r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=10)
     r.raise_for_status()
-    return r.json()
+    rows = r.json()
+    if not rows:
+        return 0
+    for row in rows:
+        update_track_date(row["id"], new_year)
+    return len(rows)
 
 
 def update_track_date(track_id: int, new_date: str) -> None:
