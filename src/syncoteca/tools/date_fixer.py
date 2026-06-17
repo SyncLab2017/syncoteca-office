@@ -449,6 +449,7 @@ async def run_date_fix(
                         f"⏳ [{i+1}/{len(tracks)}] осталось ~{remaining}с\n"
                         f"✅ Обновлено: {updated}\n"
                         f"Последние:\n{recent}",
+                        parse_mode="HTML",
                     )
                 except Exception:
                     pass
