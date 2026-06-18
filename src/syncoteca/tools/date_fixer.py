@@ -370,7 +370,8 @@ def build_date_fix_excel(records: list[dict]) -> bytes:
     return buf.getvalue()
 
 
-_CURSOR_SESSION = "verify_dates_cursor_{chat_id}"
+def _cursor_key(chat_id: int) -> str:
+    return f"verify_dates_cursor_{chat_id}"
 
 
 def _load_verify_cursor(chat_id: int) -> int:
@@ -379,25 +380,47 @@ def _load_verify_cursor(chat_id: int) -> int:
         r = httpx.get(
             f"{_sb_base()}/rest/v1/agent_sessions",
             headers=_sb_headers(),
-            params={"session_id": f"eq.verify_dates_cursor_{chat_id}", "select": "task_context"},
+            params={
+                "session_id": f"eq.{_cursor_key(chat_id)}",
+                "select": "task_context",
+                "order": "id.desc",
+                "limit": "1",
+            },
             timeout=5,
         )
+        if not r.is_success:
+            return 0
         rows = r.json()
         if rows:
-            return int(rows[0].get("task_context", {}).get("after_id", 0))
+            tc = rows[0].get("task_context") or {}
+            if isinstance(tc, str):
+                import json as _json
+                tc = _json.loads(tc)
+            return int(tc.get("after_id", 0))
     except Exception:
         pass
     return 0
 
 
 def _save_verify_cursor(chat_id: int, after_id: int) -> None:
-    """Persist last processed track ID to Supabase."""
+    """Persist last processed track ID to Supabase (DELETE + INSERT for reliability)."""
+    base = _sb_base()
+    hdrs = _sb_headers()
+    key = _cursor_key(chat_id)
     try:
+        # Remove old cursor row(s) first
+        httpx.delete(
+            f"{base}/rest/v1/agent_sessions",
+            headers={**hdrs, "Prefer": "return=minimal"},
+            params={"session_id": f"eq.{key}"},
+            timeout=5,
+        )
+        # Insert fresh
         httpx.post(
-            f"{_sb_base()}/rest/v1/agent_sessions",
-            headers={**_sb_headers(), "Prefer": "resolution=merge-duplicates"},
+            f"{base}/rest/v1/agent_sessions",
+            headers={**hdrs, "Prefer": "return=minimal"},
             json={
-                "session_id": f"verify_dates_cursor_{chat_id}",
+                "session_id": key,
                 "agent_name": "kowalski",
                 "messages": [],
                 "task_context": {"after_id": after_id},
@@ -406,6 +429,14 @@ def _save_verify_cursor(chat_id: int, after_id: int) -> None:
         )
     except Exception:
         pass
+
+
+# Module-level stop flag: chat_ids that requested date-fix stop
+_stop_requested: set[int] = set()
+
+
+def request_stop_date_fix(chat_id: int) -> None:
+    _stop_requested.add(chat_id)
 
 
 async def run_date_fix(
@@ -485,7 +516,13 @@ async def run_date_fix(
         # Album-level cache: (artist, album) → (year, url) | None
         _album_cache: dict[tuple[str, str], tuple[int, str] | None] = {}
 
+        _stopped = False
+        i = -1
         for i, track in enumerate(tracks):
+            if chat_id in _stop_requested:
+                _stop_requested.discard(chat_id)
+                _stopped = True
+                break
             _artist = track.get("artist") or ""
             title = track.get("title") or ""
             _album = track.get("album") or ""
@@ -604,18 +641,22 @@ async def run_date_fix(
         from datetime import date as _date
         today = _date.today().strftime("%d.%m.%Y")
 
-        # Save cursor: last track ID processed in full-scan mode
-        if _full_scan and tracks:
-            last_id = tracks[-1]["id"]
-            await loop.run_in_executor(None, _save_verify_cursor, chat_id, last_id)
+        # Save cursor to the LAST ACTUALLY PROCESSED track (not end of batch if stopped)
+        _processed_count = i + 1 if not _stopped else i  # i = last index before stop
+        _last_processed_track = tracks[_processed_count - 1] if _processed_count > 0 else None
+        if _full_scan and _last_processed_track:
+            cursor_id = _last_processed_track["id"]
+            await loop.run_in_executor(None, _save_verify_cursor, chat_id, cursor_id)
 
+        status = "остановлена" if _stopped else "завершена"
+        processed_n = _processed_count
         summary_lines = [
-            f"🗃️ Ковальски: проверка дат завершена — {today}",
-            f"✅ Обновлено: {updated} | 📊 Обработано: {len(tracks)}",
+            f"🗃️ Ковальски: проверка дат {status} — {today}",
+            f"✅ Обновлено: {updated} | 📊 Обработано: {processed_n}",
         ]
-        if _full_scan and tracks:
+        if _full_scan and _last_processed_track:
             first_id = tracks[0]["id"]
-            last_id = tracks[-1]["id"]
+            last_id = _last_processed_track["id"]
             summary_lines[1] += f"\n📍 Блок: ID {first_id}–{last_id} → следующий запуск продолжит с ID {last_id + 1}"
         if updated_log:
             shown = updated_log[:40]

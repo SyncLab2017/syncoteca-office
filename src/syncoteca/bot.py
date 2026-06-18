@@ -2071,6 +2071,13 @@ def _kowalski_detect_intent(text: str) -> str | None:
     )):
         return "stop_scrape"
     if any(w in lower for w in (
+        "стоп дат", "остановить проверку дат", "останови проверку дат",
+        "стоп проверку", "отмена проверки дат", "прерви проверку дат",
+        "стоп verify", "stop verify", "стоп dates", "stop dates",
+        "остановить даты", "останови даты", "стоп даты",
+    )):
+        return "stop_date_fix"
+    if any(w in lower for w in (
         "скип", "скипни", "пропусти", "пропустить", "skip album", "пропусти альбом",
         "пропустить альбом", "не нужен этот", "не нужно это",
     )):
@@ -2723,6 +2730,14 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         else:
             await update.message.reply_text("🗃️ Ковальски: парсинг сейчас не запущен.")
         _PENDING_LABEL_SCRAPE.pop(chat_id, None)
+
+    elif intent == "stop_date_fix":
+        from syncoteca.tools.date_fixer import request_stop_date_fix, _running as _df_running
+        if _df_running:
+            request_stop_date_fix(chat_id)
+            await update.message.reply_text("🛑 Ковальски: отправляю сигнал остановки проверки дат. Завершится после текущего трека.")
+        else:
+            await update.message.reply_text("🗃️ Ковальски: проверка дат сейчас не запущена.")
 
     elif intent == "skip_album":
         from syncoteca.tools.label_scraper import skip_current_album, is_running
@@ -4142,6 +4157,19 @@ async def handle_stop_label_parse(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("🗃️ Ковальски: парсинг сейчас не запущен.")
 
 
+async def handle_stop_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/stop_dates — Stop the running date verification."""
+    if not _is_owner(update):
+        return await _deny(update)
+    from syncoteca.tools.date_fixer import request_stop_date_fix, _running as _df_running
+    chat_id = update.effective_chat.id
+    if _df_running:
+        request_stop_date_fix(chat_id)
+        await update.message.reply_text("🛑 Ковальски: сигнал остановки отправлен. Проверка дат завершится после текущего трека.")
+    else:
+        await update.message.reply_text("🗃️ Ковальски: проверка дат сейчас не запущена.")
+
+
 async def handle_sync_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/sync_labels — Sync missing labels from tracks into labels registry."""
     if not _is_owner(update):
@@ -4238,6 +4266,7 @@ async def post_init(app: Application) -> None:
         BotCommand("parse_label", "Ковальски: парсинг каталога лейбла"),
         BotCommand("stop_label_parse", "Ковальски: остановить парсинг лейбла"),
         BotCommand("verify_dates", "Ковальски: даты релизов (Discogs + MusicBrainz)"),
+        BotCommand("stop_dates", "Ковальски: остановить проверку дат"),
         BotCommand("sync_labels", "Ковальски: добавить новые лейблы в реестр"),
         BotCommand("stats", "Ковальски: статистика базы по лейблам"),
         BotCommand("license", "Рико (лицензии, права)"),
@@ -4271,6 +4300,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("briefing", handle_briefing))
     app.add_handler(CommandHandler("fix_dates", handle_fix_dates))
     app.add_handler(CommandHandler("verify_dates", handle_verify_dates))
+    app.add_handler(CommandHandler("stop_dates", handle_stop_dates))
     app.add_handler(CommandHandler("enrich", handle_enrich))
     app.add_handler(CommandHandler("parse_label", handle_parse_label))
     app.add_handler(CommandHandler("stop_label_parse", handle_stop_label_parse))
