@@ -701,21 +701,28 @@ def _lbl_norm(s: str) -> str:
     return unicodedata.normalize("NFC", s.strip()).casefold()
 
 
+def _split_label_parts(label: str) -> list[str]:
+    """Split a composite label string into individual parts."""
+    import re
+    return [p.strip() for p in re.split(r',\s*', label) if p.strip()]
+
+
 def fetch_label_stats_for_excel() -> list[dict]:
     """Merge tracks label counts with labels table (parent grouping).
 
-    Returns list sorted by tracks desc:
-    [{"label": str, "parent": str, "tracks": int, "in_labels_table": bool}, ...]
-    Labels in tracks but absent from labels table are marked in_labels_table=False.
+    Status values per row:
+      "да"                — single label, exact match in DB
+      "составной_все"     — multi-label, ALL individual parts found in DB
+      "составной_частично"— multi-label, SOME parts missing from DB
+      "нет"               — single label, not in DB (candidate to add)
 
-    Matching is Unicode-normalized + case-insensitive to handle mixed-script
-    label names (e.g. Cyrillic Х vs Latin X).
+    Matching is Unicode-normalized + case-insensitive.
     """
     sb = _sb_base()
     hdrs = _sb_headers()
 
     # 1. All track label counts (paginated)
-    # Keyed by NORMALIZED name → (original_name, count)
+    # Keyed by NORMALIZED label string → (original_name, count)
     label_counts_norm: dict[str, tuple[str, int]] = {}
     offset = 0
     PAGE = 1000
@@ -750,30 +757,52 @@ def fetch_label_stats_for_excel() -> list[dict]:
     r.raise_for_status()
     labels_db_norm: dict[str, dict] = {_lbl_norm(row["name"]): row for row in r.json()}
 
-    # 3. Merge by normalized key
+    # 3. Merge: first pass from labels DB (ensures registered labels appear)
     result: list[dict] = []
     seen_norm: set[str] = set()
 
     for norm_key, db_row in labels_db_norm.items():
         db_name = db_row["name"].strip()
-        # Count uses normalized key → matches even with Unicode/case differences
         track_entry = label_counts_norm.get(norm_key)
         cnt = track_entry[1] if track_entry else 0
         result.append({
             "label": db_name,
             "parent": (db_row.get("parent") or "").strip(),
             "tracks": cnt,
+            "status": "да",
+            "parts": [],
+            "missing_parts": [],
             "in_labels_table": True,
         })
         seen_norm.add(norm_key)
 
-    # Labels in tracks but absent from labels table (after normalized comparison)
+    # 4. Labels in tracks not found by exact match — check if composite or genuinely new
     for norm_key, (orig_name, cnt) in label_counts_norm.items():
-        if norm_key not in seen_norm:
+        if norm_key in seen_norm:
+            continue
+        parts = _split_label_parts(orig_name)
+        if len(parts) > 1:
+            # Composite: check each part individually
+            found = [p for p in parts if _lbl_norm(p) in labels_db_norm]
+            missing = [p for p in parts if _lbl_norm(p) not in labels_db_norm]
+            status = "составной_все" if not missing else "составной_частично"
             result.append({
                 "label": orig_name,
                 "parent": "",
                 "tracks": cnt,
+                "status": status,
+                "parts": parts,
+                "missing_parts": missing,
+                "in_labels_table": status == "составной_все",
+            })
+        else:
+            result.append({
+                "label": orig_name,
+                "parent": "",
+                "tracks": cnt,
+                "status": "нет",
+                "parts": [],
+                "missing_parts": [],
                 "in_labels_table": False,
             })
 
@@ -782,17 +811,34 @@ def fetch_label_stats_for_excel() -> list[dict]:
 
 
 def build_label_stats_excel(rows: list[dict], title: str = "Лейблы SYNC LAB") -> bytes:
-    """Build label statistics .xlsx: Parent | Label | Tracks | In DB columns."""
+    """Build label statistics .xlsx with composite-label detection."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Лейблы"
 
-    hdr_fill = PatternFill(start_color="1F2D3D", end_color="1F2D3D", fill_type="solid")
-    hdr_font = Font(color="FFFFFF", bold=True, size=11)
-    missing_fill = PatternFill(start_color="FFE0E0", end_color="FFE0E0", fill_type="solid")
-    zero_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+    hdr_fill   = PatternFill(start_color="1F2D3D", end_color="1F2D3D", fill_type="solid")
+    hdr_font   = Font(color="FFFFFF", bold=True, size=11)
+    fill_yes   = None  # white
+    fill_zero  = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")  # yellow — in DB, 0 tracks
+    fill_comp  = PatternFill(start_color="D6EAF8", end_color="D6EAF8", fill_type="solid")  # blue — composite, all known
+    fill_part  = PatternFill(start_color="FDEBD0", end_color="FDEBD0", fill_type="solid")  # orange — composite, some missing
+    fill_new   = PatternFill(start_color="FFE0E0", end_color="FFE0E0", fill_type="solid")  # red — new/missing
 
-    columns = [("№", 5), ("Группа (parent)", 30), ("Лейбл", 40), ("Треков", 10), ("В базе лейблов", 16)]
+    STATUS_LABELS = {
+        "да":                 "Да",
+        "составной_все":      "Составной ✓",
+        "составной_частично": "Составной (есть новые)",
+        "нет":                "Нет (новый)",
+    }
+
+    columns = [
+        ("№",              5),
+        ("Группа (parent)", 28),
+        ("Лейбл",          42),
+        ("Треков",         10),
+        ("Статус",         22),
+        ("Состав / Новые", 50),
+    ]
     for col_idx, (col_name, col_width) in enumerate(columns, 1):
         cell = ws.cell(row=1, column=col_idx, value=col_name)
         cell.font = hdr_font
@@ -803,10 +849,39 @@ def build_label_stats_excel(rows: list[dict], title: str = "Лейблы SYNC LA
     ws.freeze_panes = "A2"
 
     for i, row in enumerate(rows, 1):
-        in_db = row.get("in_labels_table", True)
+        status = row.get("status", "да")
         tracks = row.get("tracks", 0)
-        fill = missing_fill if not in_db else (zero_fill if tracks == 0 else None)
-        data = [i, row.get("parent") or "", row.get("label") or "", tracks, "Да" if in_db else "Нет"]
+        missing = row.get("missing_parts", [])
+        parts   = row.get("parts", [])
+
+        # Row fill
+        if status == "да":
+            fill = fill_zero if tracks == 0 else fill_yes
+        elif status == "составной_все":
+            fill = fill_comp
+        elif status == "составной_частично":
+            fill = fill_part
+        else:
+            fill = fill_new
+
+        # Состав column: for composites show parts with ✓/✗; for new — empty
+        if parts:
+            part_strs = []
+            for p in parts:
+                mark = "✓" if _lbl_norm(p) not in [_lbl_norm(m) for m in missing] else "✗"
+                part_strs.append(f"{mark} {p}")
+            detail = " | ".join(part_strs)
+        else:
+            detail = ""
+
+        data = [
+            i,
+            row.get("parent") or "",
+            row.get("label") or "",
+            tracks,
+            STATUS_LABELS.get(status, status),
+            detail,
+        ]
         for col_idx, value in enumerate(data, 1):
             cell = ws.cell(row=i + 1, column=col_idx, value=value)
             if fill:
@@ -815,14 +890,45 @@ def build_label_stats_excel(rows: list[dict], title: str = "Лейблы SYNC LA
     # Summary sheet
     ws2 = wb.create_sheet("Сводка")
     ws2["A1"] = title
-    ws2["A3"] = "Лейблов всего"
+    ws2["A3"] = "Строк всего"
     ws2["B3"] = len(rows)
-    ws2["A4"] = "Лейблов без треков"
-    ws2["B4"] = sum(1 for r in rows if r.get("tracks", 0) == 0)
-    ws2["A5"] = "Лейблов не в таблице labels"
-    ws2["B5"] = sum(1 for r in rows if not r.get("in_labels_table", True))
-    ws2["A6"] = "Всего треков"
-    ws2["B6"] = sum(r.get("tracks", 0) for r in rows)
+    ws2["A4"] = "Лейблов без треков (в реестре)"
+    ws2["B4"] = sum(1 for r in rows if r.get("tracks", 0) == 0 and r.get("status") == "да")
+    ws2["A5"] = "Составных (все части в базе)"
+    ws2["B5"] = sum(1 for r in rows if r.get("status") == "составной_все")
+    ws2["A6"] = "Составных (есть новые части)"
+    ws2["B6"] = sum(1 for r in rows if r.get("status") == "составной_частично")
+    ws2["A7"] = "Новых лейблов (не в базе)"
+    ws2["B7"] = sum(1 for r in rows if r.get("status") == "нет")
+    ws2["A8"] = "Всего треков"
+    ws2["B8"] = sum(r.get("tracks", 0) for r in rows if r.get("status") == "да")
+
+    # Sheet 3: new labels to potentially add
+    ws3 = wb.create_sheet("Новые лейблы")
+    ws3["A1"] = "Лейбл"
+    ws3["B1"] = "Треков"
+    ws3["C1"] = "Источник"
+    new_row = 2
+    for r in rows:
+        if r.get("status") == "нет":
+            ws3.cell(row=new_row, column=1, value=r.get("label", ""))
+            ws3.cell(row=new_row, column=2, value=r.get("tracks", 0))
+            ws3.cell(row=new_row, column=3, value="одиночный в tracks")
+            new_row += 1
+    # Also add missing parts from composites
+    seen_new: set[str] = set()
+    for r in rows:
+        if r.get("status") == "составной_частично":
+            for mp in r.get("missing_parts", []):
+                if _lbl_norm(mp) not in seen_new:
+                    ws3.cell(row=new_row, column=1, value=mp)
+                    ws3.cell(row=new_row, column=2, value=r.get("tracks", 0))
+                    ws3.cell(row=new_row, column=3, value=f"из составного: {r.get('label', '')}")
+                    new_row += 1
+                    seen_new.add(_lbl_norm(mp))
+    ws3.column_dimensions["A"].width = 40
+    ws3.column_dimensions["B"].width = 10
+    ws3.column_dimensions["C"].width = 50
 
     buf = io.BytesIO()
     wb.save(buf)
