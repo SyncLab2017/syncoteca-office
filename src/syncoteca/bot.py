@@ -2082,6 +2082,12 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "пропустить альбом", "не нужен этот", "не нужно это",
     )):
         return "skip_album"
+    if any(w in lower for w in (
+        "добавь составные", "разбери составные", "добавь части лейблов",
+        "добавь лейблы из составных", "занеси составные лейблы",
+        "добавь недостающие части", "sync_label_parts",
+    )):
+        return "sync_label_parts"
     # Status queries about enrichment must NOT trigger a new enrich run
     if re.search(r'\b(закончил|завершил|уже\s+закончил|ты\s+закончил|готово)\b', lower) and \
        any(w in lower for w in ("обогащени", "обогат", "обогащ", "enrich")):
@@ -2791,6 +2797,27 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка: {e}")
 
+    elif intent == "sync_label_parts":
+        from syncoteca.tools.catalog_export import sync_composite_label_parts
+        thinking = await update.message.reply_text("🔍 Ковальски: ищу части составных лейблов, которых нет в базе…")
+        try:
+            result = await loop.run_in_executor(None, lambda: sync_composite_label_parts(dry_run=True))
+            new_labels = result["new"]
+            if not new_labels:
+                await thinking.edit_text("✅ Ковальски: все части составных лейблов уже есть в таблице labels.")
+                return
+            preview_lines = [f"  • {item['name']}" for item in new_labels[:25]]
+            if len(new_labels) > 25:
+                preview_lines.append(f"  … и ещё {len(new_labels) - 25}")
+            await thinking.edit_text(
+                f"🗃️ Ковальски: нашёл {len(new_labels)} частей составных лейблов, которых нет в базе:\n\n"
+                + "\n".join(preview_lines) + "\n\n"
+                "⚠️ Добавлю их БЕЗ ID с Яндекс.Музыки — потом нужно вручную найти ID каждого.\n\n"
+                "Написать «да, добавляй» — добавлю все в таблицу labels."
+            )
+            _PENDING_LABEL_SCRAPE[chat_id] = {"type": "sync_parts", "count": len(new_labels)}
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка: {e}")
 
 
 async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: str, prefix: str = "") -> None:
@@ -3046,8 +3073,39 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
 
             if lower_req in _no_words or any(w in lower_req for w in ("не надо", "не сейчас", "отмен")):
                 _PENDING_LABEL_SCRAPE.pop(chat_id_early, None)
-                await update.message.reply_text("🗃️ Ковальски: парсинг отменён.")
+                await update.message.reply_text("🗃️ Ковальски: отменено.")
                 return
+
+            # Sync-parts confirmation branch
+            if pending.get("type") == "sync_parts":
+                _yes_parts = {"да", "конечно", "давай", "ок", "окей", "добавляй", "yes", "поехали", "запускай", "добавь"}
+                if lower_req in _yes_parts or lower_req.startswith("да"):
+                    _PENDING_LABEL_SCRAPE.pop(chat_id_early, None)
+                    count = pending.get("count", 0)
+                    msg = await update.message.reply_text(f"🗃️ Ковальски: добавляю {count} лейблов в базу…")
+                    try:
+                        from syncoteca.tools.catalog_export import sync_composite_label_parts
+                        loop_sp = asyncio.get_event_loop()
+                        result = await loop_sp.run_in_executor(
+                            None, lambda: sync_composite_label_parts(dry_run=False)
+                        )
+                        inserted = result["inserted"]
+                        failed = result.get("failed", [])
+                        added_names = [item["name"] for item in result["new"]]
+                        lines = [f"✅ Ковальски: добавил {inserted} лейблов без ID с Яндекс.Музыки."]
+                        if failed:
+                            lines.append(f"⚠️ Не удалось добавить {len(failed)}: {', '.join(failed[:10])}")
+                        if added_names:
+                            lines.append("\n🔍 Найди вручную на Яндекс.Музыке и добавь ID:")
+                            for name in added_names[:20]:
+                                lines.append(f"  • {name}")
+                            if len(added_names) > 20:
+                                lines.append(f"  … и ещё {len(added_names) - 20}")
+                        await msg.edit_text("\n".join(lines))
+                    except Exception as _e:
+                        await msg.edit_text(f"❌ Ошибка: {_e}")
+                    return
+                return  # not yes — keep pending, ignore
 
             stage = pending.get("stage", "confirm")
             sublabels = pending.get("sublabels", [])

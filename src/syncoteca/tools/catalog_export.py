@@ -938,11 +938,12 @@ def build_label_stats_excel(rows: list[dict], title: str = "Лейблы SYNC LA
 def sync_composite_label_parts(dry_run: bool = True) -> dict:
     """Split composite track labels by comma, add missing parts to labels table.
 
-    Returns:
-        {"new": [{"name": str, "id": str}], "skipped": int, "inserted": int}
-    """
-    import uuid as _uuid
+    Uses insert_label RPC (same as sync_labels.js): checks by name first,
+    inserts with name-as-ID when no proper Yandex Music ID is known.
 
+    Returns:
+        {"new": [{"name": str}], "skipped": int, "inserted": int, "failed": list[str]}
+    """
     sb = _sb_base()
     hdrs = _sb_headers()
 
@@ -977,44 +978,49 @@ def sync_composite_label_parts(dry_run: bool = True) -> dict:
     r.raise_for_status()
     existing_norm: set[str] = {_lbl_norm(row["name"]) for row in r.json()}
 
-    # 3. Extract all individual parts from all label strings
+    # 3. Extract all individual parts from composite label strings only
     candidate_norm: dict[str, str] = {}  # norm_key → original name (first seen)
     for lbl in raw_labels:
         parts = _split_label_parts(lbl)
+        if len(parts) < 2:
+            continue  # skip single-label strings — those aren't composite
         for part in parts:
             key = _lbl_norm(part)
             if key not in candidate_norm:
                 candidate_norm[key] = part
 
-    # 4. Find truly new parts
+    # 4. Find parts not yet in DB
     new_labels = [
-        {"name": original, "id": str(_uuid.uuid4())}
+        {"name": original}
         for key, original in sorted(candidate_norm.items(), key=lambda x: x[1])
         if key not in existing_norm
     ]
 
     if dry_run or not new_labels:
-        return {"new": new_labels, "skipped": len(existing_norm), "inserted": 0}
+        return {"new": new_labels, "skipped": len(existing_norm), "inserted": 0, "failed": []}
 
-    # 5. Insert new labels in batches of 100
+    # 5. Insert via insert_label RPC (name-as-ID fallback, dedup by name)
     inserted = 0
-    BATCH = 100
-    for i in range(0, len(new_labels), BATCH):
-        batch = new_labels[i:i + BATCH]
-        payload = [
-            {"id": item["id"], "name": item["name"], "active": True, "parent": None}
-            for item in batch
-        ]
-        r = httpx.post(
-            f"{sb}/rest/v1/labels",
-            headers={**hdrs, "Content-Type": "application/json", "Prefer": "return=minimal"},
-            json=payload,
-            timeout=30,
-        )
-        r.raise_for_status()
-        inserted += len(batch)
+    failed: list[str] = []
+    for item in new_labels:
+        name = item["name"]
+        try:
+            r = httpx.post(
+                f"{sb}/rest/v1/rpc/insert_label",
+                headers={**hdrs, "Content-Type": "application/json"},
+                json={"p_id": name, "p_name": name},
+                timeout=10,
+            )
+            r.raise_for_status()
+            resp = r.json()
+            if isinstance(resp, dict) and resp.get("status") == "exists":
+                pass  # already in DB by name, skip
+            else:
+                inserted += 1
+        except Exception:
+            failed.append(name)
 
-    return {"new": new_labels, "skipped": len(existing_norm), "inserted": inserted}
+    return {"new": new_labels, "skipped": len(existing_norm), "inserted": inserted, "failed": failed}
 
 
 def fetch_recent_tracks(limit: int = 50) -> list[dict]:
