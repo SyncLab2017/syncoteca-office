@@ -935,6 +935,88 @@ def build_label_stats_excel(rows: list[dict], title: str = "Лейблы SYNC LA
     return buf.getvalue()
 
 
+def sync_composite_label_parts(dry_run: bool = True) -> dict:
+    """Split composite track labels by comma, add missing parts to labels table.
+
+    Returns:
+        {"new": [{"name": str, "id": str}], "skipped": int, "inserted": int}
+    """
+    import uuid as _uuid
+
+    sb = _sb_base()
+    hdrs = _sb_headers()
+
+    # 1. Collect all unique label strings from tracks (paginated)
+    raw_labels: set[str] = set()
+    offset = 0
+    PAGE = 1000
+    while True:
+        r = httpx.get(
+            f"{sb}/rest/v1/tracks",
+            headers=hdrs,
+            params={"select": "label", "limit": str(PAGE), "offset": str(offset)},
+            timeout=30,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        for row in rows:
+            lbl = (row.get("label") or "").strip()
+            if lbl:
+                raw_labels.add(lbl)
+        if len(rows) < PAGE:
+            break
+        offset += PAGE
+
+    # 2. All existing labels (normalized)
+    r = httpx.get(
+        f"{sb}/rest/v1/labels",
+        headers=hdrs,
+        params={"select": "name", "limit": "10000"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    existing_norm: set[str] = {_lbl_norm(row["name"]) for row in r.json()}
+
+    # 3. Extract all individual parts from all label strings
+    candidate_norm: dict[str, str] = {}  # norm_key → original name (first seen)
+    for lbl in raw_labels:
+        parts = _split_label_parts(lbl)
+        for part in parts:
+            key = _lbl_norm(part)
+            if key not in candidate_norm:
+                candidate_norm[key] = part
+
+    # 4. Find truly new parts
+    new_labels = [
+        {"name": original, "id": str(_uuid.uuid4())}
+        for key, original in sorted(candidate_norm.items(), key=lambda x: x[1])
+        if key not in existing_norm
+    ]
+
+    if dry_run or not new_labels:
+        return {"new": new_labels, "skipped": len(existing_norm), "inserted": 0}
+
+    # 5. Insert new labels in batches of 100
+    inserted = 0
+    BATCH = 100
+    for i in range(0, len(new_labels), BATCH):
+        batch = new_labels[i:i + BATCH]
+        payload = [
+            {"id": item["id"], "name": item["name"], "active": True, "parent": None}
+            for item in batch
+        ]
+        r = httpx.post(
+            f"{sb}/rest/v1/labels",
+            headers={**hdrs, "Content-Type": "application/json", "Prefer": "return=minimal"},
+            json=payload,
+            timeout=30,
+        )
+        r.raise_for_status()
+        inserted += len(batch)
+
+    return {"new": new_labels, "skipped": len(existing_norm), "inserted": inserted}
+
+
 def fetch_recent_tracks(limit: int = 50) -> list[dict]:
     """Return the most recently added tracks ordered by id DESC."""
     params = {

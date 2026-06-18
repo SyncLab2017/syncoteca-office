@@ -2082,6 +2082,13 @@ def _kowalski_detect_intent(text: str) -> str | None:
         "пропустить альбом", "не нужен этот", "не нужно это",
     )):
         return "skip_album"
+    if any(w in lower for w in (
+        "разбери составные", "добавь составные", "синхронизируй лейблы",
+        "добавь лейблы из треков", "добавь части лейблов", "sync_label_parts",
+        "добавь все лейблы", "занеси лейблы", "занести лейблы",
+        "добавь недостающие лейблы", "дополни лейблы", "пополни лейблы",
+    )):
+        return "sync_label_parts"
     # Status queries about enrichment must NOT trigger a new enrich run
     if re.search(r'\b(закончил|завершил|уже\s+закончил|ты\s+закончил|готово)\b', lower) and \
        any(w in lower for w in ("обогащени", "обогат", "обогащ", "enrich")):
@@ -2791,6 +2798,29 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка: {e}")
 
+    elif intent == "sync_label_parts":
+        from syncoteca.tools.catalog_export import sync_composite_label_parts
+        thinking = await update.message.reply_text("🔍 Ковальски: сканирую составные лейблы…")
+        try:
+            # Dry run first — show what would be added
+            result = await loop.run_in_executor(None, lambda: sync_composite_label_parts(dry_run=True))
+            new_labels = result["new"]
+            if not new_labels:
+                await thinking.edit_text("✅ Ковальски: все части составных лейблов уже есть в базе.")
+                return
+            preview = "\n".join(f"  • {item['name']}" for item in new_labels[:20])
+            if len(new_labels) > 20:
+                preview += f"\n  … и ещё {len(new_labels) - 20}"
+            await thinking.edit_text(
+                f"🗃️ Ковальски: найдено {len(new_labels)} новых лейблов для добавления:\n\n"
+                f"{preview}\n\n"
+                f"Написать «да, добавляй» — добавлю все в таблицу labels."
+            )
+            # Store pending action
+            _PENDING_LABEL_SCRAPE[chat_id] = {"type": "sync_parts", "count": len(new_labels)}
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка: {e}")
+
 
 async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: str, prefix: str = "") -> None:
     from syncoteca.tools.label_scraper import scrape_label
@@ -3042,6 +3072,34 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
             pending = _PENDING_LABEL_SCRAPE[chat_id_early]
             lower_req = user_request.lower().strip(".,!? ")
             _no_words = {"нет", "не надо", "отмена", "стоп", "cancel", "no", "отменить", "не сейчас"}
+
+            # Sync-label-parts confirmation branch
+            if pending.get("type") == "sync_parts":
+                if lower_req in _no_words or any(w in lower_req for w in ("не надо", "не сейчас", "отмен")):
+                    _PENDING_LABEL_SCRAPE.pop(chat_id_early, None)
+                    await update.message.reply_text("🗃️ Ковальски: добавление отменено.")
+                    return
+                _yes_parts = {"да", "конечно", "давай", "ок", "окей", "добавляй", "yes", "поехали", "запускай", "добавь"}
+                if lower_req in _yes_parts or lower_req.startswith("да"):
+                    _PENDING_LABEL_SCRAPE.pop(chat_id_early, None)
+                    count = pending.get("count", 0)
+                    msg = await update.message.reply_text(f"🗃️ Ковальски: добавляю {count} лейблов в базу…")
+                    try:
+                        from syncoteca.tools.catalog_export import sync_composite_label_parts
+                        loop_lp = asyncio.get_event_loop()
+                        result = await loop_lp.run_in_executor(
+                            None, lambda: sync_composite_label_parts(dry_run=False)
+                        )
+                        await msg.edit_text(
+                            f"✅ Ковальски: добавлено {result['inserted']} лейблов в таблицу labels.\n"
+                            f"Уже было в базе: {result['skipped']}."
+                        )
+                    except Exception as _e:
+                        await msg.edit_text(f"❌ Ошибка: {_e}")
+                    return
+                # not yes/no — fall through
+                return
+
             if lower_req in _no_words or any(w in lower_req for w in ("не надо", "не сейчас", "отмен")):
                 _PENDING_LABEL_SCRAPE.pop(chat_id_early, None)
                 await update.message.reply_text("🗃️ Ковальски: парсинг отменён.")
