@@ -695,18 +695,28 @@ def fetch_parent_stats(parent: str) -> dict:
     }
 
 
+def _lbl_norm(s: str) -> str:
+    """Normalize label name for comparison: NFC + strip + casefold."""
+    import unicodedata
+    return unicodedata.normalize("NFC", s.strip()).casefold()
+
+
 def fetch_label_stats_for_excel() -> list[dict]:
     """Merge tracks label counts with labels table (parent grouping).
 
     Returns list sorted by tracks desc:
     [{"label": str, "parent": str, "tracks": int, "in_labels_table": bool}, ...]
     Labels in tracks but absent from labels table are marked in_labels_table=False.
+
+    Matching is Unicode-normalized + case-insensitive to handle mixed-script
+    label names (e.g. Cyrillic Х vs Latin X).
     """
     sb = _sb_base()
     hdrs = _sb_headers()
 
     # 1. All track label counts (paginated)
-    label_counts: dict[str, int] = {}
+    # Keyed by NORMALIZED name → (original_name, count)
+    label_counts_norm: dict[str, tuple[str, int]] = {}
     offset = 0
     PAGE = 1000
     while True:
@@ -721,12 +731,16 @@ def fetch_label_stats_for_excel() -> list[dict]:
         for row in rows:
             lbl = (row.get("label") or "").strip()
             if lbl:
-                label_counts[lbl] = label_counts.get(lbl, 0) + 1
+                key = _lbl_norm(lbl)
+                if key in label_counts_norm:
+                    label_counts_norm[key] = (label_counts_norm[key][0], label_counts_norm[key][1] + 1)
+                else:
+                    label_counts_norm[key] = (lbl, 1)
         if len(rows) < PAGE:
             break
         offset += PAGE
 
-    # 2. All labels from labels table
+    # 2. All labels from labels table, keyed by NORMALIZED name
     r = httpx.get(
         f"{sb}/rest/v1/labels",
         headers=hdrs,
@@ -734,27 +748,30 @@ def fetch_label_stats_for_excel() -> list[dict]:
         timeout=30,
     )
     r.raise_for_status()
-    labels_db = {row["name"].strip(): row for row in r.json()}
+    labels_db_norm: dict[str, dict] = {_lbl_norm(row["name"]): row for row in r.json()}
 
-    # 3. Merge
+    # 3. Merge by normalized key
     result: list[dict] = []
-    seen: set[str] = set()
+    seen_norm: set[str] = set()
 
-    for name, row in labels_db.items():
-        cnt = label_counts.get(name, 0)
+    for norm_key, db_row in labels_db_norm.items():
+        db_name = db_row["name"].strip()
+        # Count uses normalized key → matches even with Unicode/case differences
+        track_entry = label_counts_norm.get(norm_key)
+        cnt = track_entry[1] if track_entry else 0
         result.append({
-            "label": name,
-            "parent": (row.get("parent") or "").strip(),
+            "label": db_name,
+            "parent": (db_row.get("parent") or "").strip(),
             "tracks": cnt,
             "in_labels_table": True,
         })
-        seen.add(name)
+        seen_norm.add(norm_key)
 
-    # Labels in tracks but absent from labels table
-    for lbl, cnt in label_counts.items():
-        if lbl not in seen:
+    # Labels in tracks but absent from labels table (after normalized comparison)
+    for norm_key, (orig_name, cnt) in label_counts_norm.items():
+        if norm_key not in seen_norm:
             result.append({
-                "label": lbl,
+                "label": orig_name,
                 "parent": "",
                 "tracks": cnt,
                 "in_labels_table": False,
