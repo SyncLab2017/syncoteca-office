@@ -978,6 +978,15 @@ def sync_composite_label_parts(dry_run: bool = True) -> dict:
     r.raise_for_status()
     existing_norm: set[str] = {_lbl_norm(row["name"]) for row in r.json()}
 
+    # Phrases that appear in track label fields but aren't real label names
+    _SKIP_FRAGMENTS = re.compile(
+        r"^(?:under\s+exclusive|exclusive\s+license|licensed?\s+(?:to|from|by)|"
+        r"(?:a\s+)?division\s+of|distributed\s+by|p\s+\d{4}|℗\s*\d{4}|"
+        r"all\s+rights|rights?\s+reserved|manufactured|marketed\s+by|"
+        r"\W+)$",
+        re.IGNORECASE,
+    )
+
     # 3. Extract all individual parts from composite label strings only
     candidate_norm: dict[str, str] = {}  # norm_key → original name (first seen)
     for lbl in raw_labels:
@@ -985,6 +994,8 @@ def sync_composite_label_parts(dry_run: bool = True) -> dict:
         if len(parts) < 2:
             continue  # skip single-label strings — those aren't composite
         for part in parts:
+            if len(part) < 2 or _SKIP_FRAGMENTS.match(part):
+                continue  # skip garbage fragments
             key = _lbl_norm(part)
             if key not in candidate_norm:
                 candidate_norm[key] = part
