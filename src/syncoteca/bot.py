@@ -4123,7 +4123,7 @@ async def handle_enrich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     _has_filter = artist_filter or date_from
     m_limit = _re.search(r'\b(\d{1,4})\b', args_str)
-    limit = min(int(m_limit.group(1)), 2000) if m_limit and not _has_filter else (2000 if _has_filter else 250)
+    limit = min(int(m_limit.group(1)), 5000) if m_limit and not _has_filter else (2000 if _has_filter else 1000)
 
     chat_id = update.effective_chat.id
     ACTIVE_AGENT[chat_id] = "content_manager"
