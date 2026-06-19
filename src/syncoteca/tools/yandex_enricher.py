@@ -38,23 +38,40 @@ def get_empty_tracks(
     date_from: Optional[str] = None,
     artist: Optional[str] = None,
 ) -> list[dict]:
-    """Tracks with album_processed=false and link set."""
-    params = {
+    """Tracks with album_processed=false and link set.
+
+    Paginates internally using id cursor to work around Supabase max_rows
+    project setting (which may cap single-request results to e.g. 250 rows).
+    """
+    PAGE = 250  # safe page size — works even if max_rows=250
+    base_params: dict = {
         "album_processed": "is.false",
         "link": "neq.",
         "select": "*",
-        "limit": str(limit),
         "order": "id.asc",
     }
     if source:
-        params["source_type"] = f"eq.{source}"
+        base_params["source_type"] = f"eq.{source}"
     if date_from:
-        params["created_at"] = f"gte.{date_from}T00:00:00"
+        base_params["created_at"] = f"gte.{date_from}T00:00:00"
     if artist:
-        params["artist"] = f"ilike.*{artist}*"
-    r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=15)
-    r.raise_for_status()
-    return r.json()
+        base_params["artist"] = f"ilike.*{artist}*"
+
+    result: list[dict] = []
+    after_id = 0
+    while len(result) < limit:
+        page_limit = min(PAGE, limit - len(result))
+        params = {**base_params, "limit": str(page_limit), "id": f"gt.{after_id}"}
+        r = httpx.get(f"{_sb_base()}/rest/v1/tracks", headers=_sb_headers(), params=params, timeout=15)
+        r.raise_for_status()
+        page = r.json()
+        if not page:
+            break
+        result.extend(page)
+        after_id = page[-1]["id"]
+        if len(page) < page_limit:
+            break
+    return result
 
 
 def count_empty_tracks() -> int:
