@@ -3695,21 +3695,28 @@ def parse_reschedule_intent(text: str) -> dict:
 
 def _is_briefing_intent(text: str) -> bool:
     lower = text.lower()
+    # Calendar-event intent ("назначь встречу", "запиши митинг в календаре") must
+    # bypass briefing — даже если в тексте упомянут weekday ("это понедельник").
+    if re.search(r"\b(встреч\w*|созвон\w*|митинг\w*|событи\w*|календар\w*)", lower) and \
+       re.search(r"\b(назначь\w*|назначить|запиши\w*|запланируй\w*|поставь\w*|создай\w*|добавь\w*|занеси\w*|внеси\w*)", lower):
+        return False
     # Task creation commands ("поставь задачу", "создай задачу в асане") look like
     # briefing due to "задач*" keyword — exclude them explicitly.
     if any(v in lower for v in _TASK_CREATION_VERBS) and "задач" in lower:
         return False
     has_tasks = any(w in lower for w in _BRIEFING_KEYWORDS)
-    # Also trigger on date/person scope words even without an explicit task keyword
-    scope_words = (
-        "завтра", "следующ", "будущ", "недел",
-        "екатерин", "катер", "катя", "кати",
-        "александр", "саш", "алекс", "саня",
-        "kate", "katya", "katy", "katie", "ekaterina",
-        "alex", "sasha", "alexander", "alexandra", "alexa",
-    )
-    has_scope = any(w in lower for w in scope_words)
-    return has_tasks or (has_scope and any(w in lower for w in ("задач", "дел", "план")))
+    # Date/person scope words. "недел" must use \b — иначе матчит "понедельник".
+    # Same for "дел" — substring of "понедельник", "сделать", etc.
+    scope_patterns = [
+        r"\bзавтра\w*", r"\bследующ\w*", r"\bбудущ\w*", r"\bнедел\w*",
+        r"\bекатерин\w*", r"\bкатер\w*", r"\bкатя\b", r"\bкати\b",
+        r"\bалександр\w*", r"\bсаш\w*", r"\bалекс\w*", r"\bсаня\b",
+        r"\bkate\b", r"\bkatya\b", r"\bkaty\b", r"\bkatie\b", r"\bekaterina\b",
+        r"\balex\w*", r"\bsasha\b", r"\balexander\b", r"\balexandra\b", r"\balexa\b",
+    ]
+    has_scope = any(re.search(p, lower) for p in scope_patterns)
+    has_task_word = bool(re.search(r"\b(задач\w*|дел\w*|план\w*)\b", lower))
+    return has_tasks or (has_scope and has_task_word)
 
 
 
