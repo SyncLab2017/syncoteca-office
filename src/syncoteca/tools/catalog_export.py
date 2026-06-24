@@ -215,15 +215,20 @@ def parse_export_query(text: str) -> dict:
     if m:
         filters["label"] = _strip_quotes(m.group(1).strip())
 
-    # Quoted artist name: «Руки Вверх», "Аквариум" — guillemets/quotes signal artist directly
-    if not filters.get("artist"):
+    # Quoted name: «Руки Вверх» / "Аквариум". By default = artist.
+    # But if preceded by song-context word (песня/трек/композиция) → it's a track title.
+    if not filters.get("artist") and not filters.get("title"):
         m = re.search(r'[«"]([\w\s.\-!?]+?)[»"]', text)
         if m:
             candidate = m.group(1).strip()
-            # Accept if 1–5 words and not a genre/label/year phrase
             cand_words = candidate.split()
             if 1 <= len(cand_words) <= 5:
-                filters["artist"] = candidate
+                # Look ~30 chars before the quote for a song context word.
+                preceding = text[max(0, m.start() - 30):m.start()].lower()
+                if re.search(r"\b(?:песн[яюеи]|трек[еау]?|композици[яюие]|сингл[ауе]?)", preceding):
+                    filters["title"] = candidate
+                else:
+                    filters["artist"] = candidate
 
     # Artist: "репертуар X" / "исполнитель X" / "группа X" / "артист X"
     # Handles Russian inflection: группа/группе/группы/группой/группу
@@ -432,7 +437,7 @@ def parse_export_query(text: str) -> dict:
 def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
     """Query Supabase tracks with the given filters. Returns list of track dicts."""
     params: dict = {
-        "select": "id,title,artist,album,label,music_author,lyrics_author,release_date,genre_1,link",
+        "select": "id,title,artist,album,duration,label,music_author,lyrics_author,release_date,genre_1,genre_2,genre_3,genre_4,genre_5,link",
         "order": "artist.asc,release_date.asc",
         "limit": str(limit),
     }
@@ -485,6 +490,10 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
         for a0v in dict.fromkeys([a0, a0_stripped] if a0_stripped != a0 and len(a0_stripped) >= 3 else [a0]):
             conditions.append(f"music_author.ilike.*{a0v}*")
             conditions.append(f"lyrics_author.ilike.*{a0v}*")
+
+    if filters.get("title"):
+        t = filters["title"].replace("*", "").replace("(", "").replace(")", "")
+        conditions.append(f"title.ilike.*{t}*")
 
     if filters.get("label"):
         lb = filters["label"].replace("*", "")
@@ -564,6 +573,14 @@ def fetch_tracks(filters: dict, limit: int = 5000) -> list[dict]:
             if (m := re.search(r"\b((?:19|20)\d{2})\b", str(row.get("release_date") or "")))
             and year_from <= int(m.group(1)) <= yt_safe
         ]
+
+    # Title post-filter: when both title and artist specified, narrow OR-result to rows matching both.
+    if filters.get("title") and filters.get("artist"):
+        _t = filters["title"].lower()
+        _a = filters["artist"].lower()
+        rows = [r for r in rows
+                if _t in (r.get("title") or "").lower()
+                and _a in (r.get("artist") or "").lower()]
 
     # Music-author post-filter: all co-authors must appear in music_author or lyrics_author
     if music_authors:

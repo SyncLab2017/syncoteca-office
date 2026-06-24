@@ -2169,9 +2169,55 @@ _ARTIST_FILLER = {
 }
 
 
+def _render_kowalski_track_card(row: dict) -> str:
+    """Render single-track info card in Telegram (no LLM, fixed format)."""
+    import re as _re
+
+    def _hashtag(s: str) -> str:
+        if not s: return ""
+        return "#" + _re.sub(r"[^A-Za-zА-Яа-яЁё0-9]+", "", s)
+
+    title = row.get("title") or "?"
+    artist = row.get("artist") or "?"
+    music = row.get("music_author") or ""
+    lyrics = row.get("lyrics_author") or ""
+    duration = row.get("duration") or ""
+    label = row.get("label") or ""
+    album = row.get("album") or ""
+    link = row.get("link") or ""
+    rd = str(row.get("release_date") or "")
+    year_m = _re.search(r"\b((?:19|20)\d{2})\b", rd)
+    year = year_m.group(1) if year_m else ""
+    g_parts = [row.get(f"genre_{i}") for i in range(1, 6) if row.get(f"genre_{i}")]
+    genres = ", ".join(g_parts)
+
+    lines = [f"🎵 {artist} — {title}"]
+    if lyrics: lines.append(f"✍️ Текст: {lyrics}")
+    if music: lines.append(f"🎼 Музыка: {music}")
+    lines.append("")
+    if duration and duration not in ("00:00", "0:00"): lines.append(f"⏱️ Длительность: {duration}")
+    if label and label != "-": lines.append(f"🏷️ Лейбл: {label}")
+    lines.append("")
+    if album: lines.append(f"💿 Альбом: {album}")
+    if year: lines.append(f"📅 Цифровой релиз: {year}")
+    if link: lines.append(f"🔗 {link}")
+    lines.append("")
+    if genres: lines.append(f"🎹 Жанры: {genres}")
+
+    tags = [_hashtag(title), _hashtag(artist)]
+    if label and label != "-": tags.append(_hashtag(label))
+    if year: tags.append(f"#ЦР{year}")
+    tags = [t for t in tags if t and t != "#"]
+    if tags:
+        lines.append("")
+        lines.append(" ".join(tags))
+
+    return "\n".join(lines).strip()
+
+
 def _export_filters_are_clean(filters: dict) -> bool:
     """Return True if parsed filters look like a genuine artist/year/label (not conversational noise)."""
-    if filters.get("year_from") or filters.get("label") or filters.get("genre") or filters.get("date_added") or filters.get("release_day") or filters.get("music_authors"):
+    if filters.get("year_from") or filters.get("label") or filters.get("genre") or filters.get("date_added") or filters.get("release_day") or filters.get("music_authors") or filters.get("title"):
         return True
     artist = filters.get("artist", "")
     if not artist:
@@ -3233,9 +3279,17 @@ async def _dispatch(update: Update, agent_name: str, user_request: str) -> None:
                 if _export_filters_are_clean(_entity_filters):
                     # If we have a clean artist filter, use fetch_tracks for accurate search
                     # (handles genitive case — "Николая Носкова" → "Николай Носков")
-                    if _entity_filters.get("artist") or _entity_filters.get("year_from"):
+                    if _entity_filters.get("artist") or _entity_filters.get("year_from") or _entity_filters.get("title"):
                         from syncoteca.tools.catalog_export import fetch_tracks as _ft
                         _direct_rows = await loop.run_in_executor(None, lambda: _ft(_entity_filters, limit=2000))
+                        # Single-track direct render: title+artist filter with 1 hit → bypass Claude, send fixed-format card.
+                        if (_entity_filters.get("title") and _entity_filters.get("artist")
+                                and len(_direct_rows) == 1):
+                            _card = _render_kowalski_track_card(_direct_rows[0])
+                            try: await thinking_msg.edit_text(_card, disable_web_page_preview=True)
+                            except Exception: await update.message.reply_text(_card, disable_web_page_preview=True)
+                            ev.emit(mem_name, "task_done", _direct_rows[0].get("title", ""), status="ok")
+                            return
                         if _direct_rows:
                             _total_direct = len(_direct_rows)
                             _yf = _entity_filters.get("year_from")
