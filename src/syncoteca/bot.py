@@ -2549,11 +2549,15 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
         _before = _re_pd.sub(r'\s+(?:на|=)$', '', _before).strip()
         # Remove "(OLD →" suffix from report format "Трек (2021 →"
         _before = _re_pd.sub(r'\s*\(\??[\d?]+\s*[→>]\s*$', '', _before).strip()
+        # Strip surrounding quotes/guillemets: «Артист — Трек», "Артист - Трек"
+        _before = _before.strip('«»"\'‘’“”').strip()
 
-        # Split on last em-dash/ndash/hyphen-with-spaces to get artist and title
-        _m2 = _re_pd.search(r'^(.+?)\s*[—–]\s*(.+)$', _before)
+        # Split on em/en dash OR hyphen surrounded by whitespace (so "Би-2" stays intact).
+        # Use first separator from the right that fits artist–title pattern.
+        _m2 = _re_pd.search(r'^(.+?)\s+[—–\-]\s+(.+)$', _before)
         if _m2:
-            _q_artist, _q_title = _m2.group(1).strip(), _m2.group(2).strip()
+            _q_artist = _m2.group(1).strip().strip('«»"\'').strip()
+            _q_title = _m2.group(2).strip().strip('«»"\'').strip()
         else:
             _q_artist, _q_title = _before.strip(), ""
 
