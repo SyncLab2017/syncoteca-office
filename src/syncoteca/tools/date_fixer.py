@@ -613,8 +613,13 @@ async def run_date_fix(
                     })
 
                 if year is None:
-                    await loop.run_in_executor(None, update_track_date, track_id, "not_found")
-                    not_found += 1
+                    # Discogs+MB ничего не нашли. НЕ перезаписываем существующую дату из Яндекса —
+                    # пишем not_found ТОЛЬКО когда у трека и так не было валидной даты.
+                    if not current_year:
+                        await loop.run_in_executor(None, update_track_date, track_id, "not_found")
+                        not_found += 1
+                    else:
+                        skipped += 1
                 elif current_year and year >= current_year:
                     if not current_date or current_date == "not_found":
                         await loop.run_in_executor(None, update_track_date, track_id, str(year))
