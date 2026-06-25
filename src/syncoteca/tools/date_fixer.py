@@ -134,10 +134,23 @@ _CYRILLIC = re.compile(r'[а-яёА-ЯЁ]')
 _LATIN = re.compile(r'[a-zA-Z]')
 
 
-def _extract_min_year_and_url(results: list, artist_norm: str) -> tuple[int, str] | None:
+_RU2LAT = {
+    'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'e','ж':'zh','з':'z',
+    'и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r',
+    'с':'s','т':'t','у':'u','ф':'f','х':'h','ц':'c','ч':'ch','ш':'sh','щ':'sch',
+    'ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya'
+}
+
+def _translit_ru(s: str) -> str:
+    out = []
+    for ch in s.lower():
+        out.append(_RU2LAT.get(ch, ch))
+    return "".join(out)
+
+
+def _extract_min_year_and_url(results: list, artist_norm: str, strict: bool = False) -> tuple[int, str] | None:
     a_key = re.sub(r"[^a-zа-яёA-ZА-ЯЁ0-9]", "", artist_norm.lower())
-    # Detect script: if artist is Cyrillic but Discogs result artists are Latin (or vice versa),
-    # skip artist-match check — can't compare cross-script strings.
+    a_translit = re.sub(r"[^a-z0-9]", "", _translit_ru(a_key))
     a_is_cyrillic = bool(_CYRILLIC.search(a_key))
     a_is_latin = bool(_LATIN.search(a_key))
     best: tuple[int, str] | None = None
@@ -146,12 +159,22 @@ def _extract_min_year_and_url(results: list, artist_norm: str) -> tuple[int, str
         if "various" in title.lower():
             continue
         artist_part = re.sub(r"[^a-zа-яёA-ZА-ЯЁ0-9]", "", title.split(" - ")[0].lower())
-        # Cross-script mismatch: relax artist check
         ap_is_cyrillic = bool(_CYRILLIC.search(artist_part))
         ap_is_latin = bool(_LATIN.search(artist_part))
         cross_script = (a_is_cyrillic and ap_is_latin) or (a_is_latin and ap_is_cyrillic)
-        if not cross_script and not (artist_part in a_key or a_key in artist_part):
+
+        same_script_match = (not cross_script) and (artist_part in a_key or a_key in artist_part)
+        # Cross-script: require transliteration match (a_translit in artist_part or vice versa).
+        # Без этого «Лариса Долина» ловит «DJ Smash» — script mismatch не значит "пропусти проверку".
+        cross_script_match = cross_script and (
+            artist_part in a_translit or a_translit in artist_part
+        )
+        if not (same_script_match or cross_script_match):
             continue
+        # Strict mode (для q= broad fallback): требуем точный contains-match без cross-script transliteration loophole.
+        if strict and not same_script_match:
+            continue
+
         y = r.get("year")
         if y and 1900 < int(y) <= 2030:
             url = r.get("uri", "")
@@ -212,7 +235,7 @@ def search_discogs_year_by_album(artist: str, album: str) -> tuple[int, str] | N
         for search_type in ("master", "release"):
             data = _discogs_request({"q": f"{search_artist} {album}", "type": search_type, "per_page": "8"})
             if data:
-                result = _extract_min_year_and_url(data.get("results", []), search_artist)
+                result = _extract_min_year_and_url(data.get("results", []), search_artist, strict=True)
                 if result:
                     return result
     return None
@@ -235,7 +258,7 @@ def search_discogs_year(artist: str, title: str) -> tuple[int, str] | None:
         for search_type in ("master", "release"):
             data = _discogs_request({"q": f"{search_artist} {title}", "type": search_type, "per_page": "8"})
             if data:
-                result = _extract_min_year_and_url(data.get("results", []), search_artist)
+                result = _extract_min_year_and_url(data.get("results", []), search_artist, strict=True)
                 if result:
                     return result
     return None
