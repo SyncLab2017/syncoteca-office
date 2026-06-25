@@ -509,6 +509,97 @@ def search_contacts_by_labels(label_names: list[str]) -> str:
         return ""
 
 
+def _extract_artist_title_pairs(text: str) -> list[tuple[str, str]]:
+    """Find lines like 'Артист - Название' (max 5 words per side). Returns [(artist, title), ...]."""
+    pairs = []
+    for raw in text.splitlines():
+        line = raw.strip().strip("•-—–*").strip()
+        if not line or len(line) > 200:
+            continue
+        # Match "Artist - Title" with whitespace-surrounded em/en/hyphen
+        m = re.match(r'^([«»"\'\w][\w\s«»"\'\.\(\)&!?]{1,80})\s+[—–\-]\s+([«»"\'\w][\w\s«»"\'\.\(\)&!?]{1,80})$', line)
+        if not m:
+            continue
+        artist = m.group(1).strip().strip('«»"\'').strip()
+        title = m.group(2).strip().strip('«»"\'').strip()
+        # Reject if either side looks like sentence (>= 6 words) or starts with verb-like words
+        if not (1 <= len(artist.split()) <= 5 and 1 <= len(title.split()) <= 6):
+            continue
+        skip_prefixes = ("сроком", "каналы", "бренд", "период", "ставка", "бюджет", "проект", "клиент")
+        if artist.lower().startswith(skip_prefixes) or title.lower().startswith(skip_prefixes):
+            continue
+        pairs.append((artist, title))
+    return pairs
+
+
+# Common cross-script synonyms for title tokens
+_TITLE_SYNONYMS = {
+    "диджей": ["dj"], "dj": ["диджей"],
+    "мс": ["mc"], "mc": ["мс"],
+    "вип": ["vip"], "vip": ["вип"],
+    "оке": ["okay", "ok"],
+}
+
+
+def _title_variants(title: str) -> list[str]:
+    """Generate title search variants: original + translit + synonym substitutions."""
+    title = title.strip()
+    variants = {title.lower()}
+    # Per-word synonym substitution
+    words = title.lower().split()
+    for i, w in enumerate(words):
+        if w in _TITLE_SYNONYMS:
+            for syn in _TITLE_SYNONYMS[w]:
+                variants.add(" ".join(words[:i] + [syn] + words[i+1:]))
+    # Translit variant (cyrillic → latin)
+    if _is_cyrillic(title):
+        variants.add(_translit_ru(title.lower()))
+    return list(variants)
+
+
+def _search_track_pairs(base: str, key: str, pairs: list[tuple[str, str]]) -> list[dict]:
+    """For each (artist, title) pair, run a targeted ilike search and aggregate rows."""
+    out_by_id = {}
+    for art, ttl in pairs:
+        art_clean = art.replace("*", "").replace(",", " ").replace("(", " ").replace(")", " ")
+        # Try multiple artist tokens: last word, full, and each individual word ≥3 chars
+        art_words = [w for w in art_clean.split() if len(w) >= 3]
+        art_tokens = list({art_clean.strip(), art_words[-1] if art_words else art_clean.strip(), *art_words})
+        # Title variants (incl. translit, dj↔диджей)
+        ttl_clean = ttl.replace("*", "").replace(",", " ").replace("(", " ").replace(")", " ").strip()
+        ttl_variants = []
+        for v in _title_variants(ttl_clean):
+            toks = v.split()[:3]
+            if toks:
+                ttl_variants.append(" ".join(toks))
+        ttl_variants = list({t for t in ttl_variants if t})
+
+        # Build OR conditions: artist matches any token AND title matches any variant.
+        # PostgREST doesn't allow nested and(or()) cleanly — issue separate queries per
+        # (artist_token, title_variant) pair and union results.
+        for a_tok in art_tokens[:4]:
+            a_tok_clean = a_tok.strip()
+            if len(a_tok_clean) < 2: continue
+            for tv in ttl_variants[:4]:
+                try:
+                    resp = httpx.get(
+                        f"{base}/rest/v1/tracks",
+                        headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                        params={
+                            "and": f"(artist.ilike.*{a_tok_clean}*,title.ilike.*{tv}*)",
+                            "select": "id,title,artist,album,label,lyrics_author,music_author,link,release_date",
+                            "limit": "10",
+                        },
+                        timeout=10,
+                    )
+                    if resp.is_success:
+                        for r in resp.json():
+                            out_by_id[r["id"]] = r
+                except Exception:
+                    continue
+    return list(out_by_id.values())
+
+
 def search_supabase_tracks(query: str) -> str:
     """Search tracks table by title/artist → extract label → look up label contacts.
     Returns combined track info + rights holder contacts or ''."""
@@ -517,18 +608,41 @@ def search_supabase_tracks(query: str) -> str:
     if not base or not key:
         return ""
     try:
-        # Priority 1: extract explicitly quoted strings «...» — these are exact names.
-        # Quoted strings bypass noise filtering entirely: no false positives from
-        # conversational words like "тебя", "каталоге" filling the DB limit.
-        quoted_terms = _extract_quoted_strings(query)
-        terms = quoted_terms
-        if not terms:
-            # Priority 2: noise-filtered word extraction
-            words = [w.strip(_QUOTE_CHARS).lower() for w in query.split()]
-            terms = [w for w in words if len(w) > 1 and w not in _TRACK_SEARCH_NOISE]
-        if not terms:
-            terms = _extract_search_terms(query) or [query.strip()]
-        logger.info(f"Track search terms: {terms} (from: {query[:80]})")
+        # Priority 0: structured "Artist - Title" lines (e.g. multi-track license request).
+        # When detected, search each pair independently — bypass noisy word extraction
+        # that drowns real names in conversational filler.
+        at_pairs = _extract_artist_title_pairs(query)
+        if at_pairs:
+            logger.info(f"Track search artist-title pairs: {at_pairs}")
+            structured_rows = _search_track_pairs(base, key, at_pairs)
+            if structured_rows:
+                rows = structured_rows
+                terms = []
+                quoted_terms = []
+                year_from = year_to = None
+                skip_year_postfilter = True
+                # Skip the rest of word-based logic — jump to formatting.
+                # (Set flag to indicate structured-only path.)
+                _structured_only = True
+            else:
+                _structured_only = False
+        else:
+            _structured_only = False
+
+        if _structured_only:
+            year_from = year_to = None
+            # rows already populated; skip query construction below
+        else:
+            # Priority 1: extract explicitly quoted strings «...» — these are exact names.
+            quoted_terms = _extract_quoted_strings(query)
+            terms = quoted_terms
+            if not terms:
+                # Priority 2: noise-filtered word extraction
+                words = [w.strip(_QUOTE_CHARS).lower() for w in query.split()]
+                terms = [w for w in words if len(w) > 1 and w not in _TRACK_SEARCH_NOISE]
+            if not terms:
+                terms = _extract_search_terms(query) or [query.strip()]
+            logger.info(f"Track search terms: {terms} (from: {query[:80]})")
 
         # Build ilike OR conditions. Add phrase condition first (all terms joined) so
         # "Агата Кристи" matches the exact artist field before per-word fallbacks.
@@ -540,13 +654,72 @@ def search_supabase_tracks(query: str) -> str:
             return out.strip()
 
         conditions = []
-        clean_terms = [_clean(t) for t in terms[:8] if len(_clean(t)) >= 2]
-        if not clean_terms:
-            return ""
+        if not _structured_only:
+            clean_terms = [_clean(t) for t in terms[:8] if len(_clean(t)) >= 2]
+            if not clean_terms:
+                return ""
+        else:
+            clean_terms = []
 
         # Year range extraction before building conditions so year tokens can be excluded
         # from text search (avoids "1983" matching in title/album/label fields).
-        year_from, year_to = _extract_year_range(query) if not quoted_terms else (None, None)
+        if not _structured_only:
+            year_from, year_to = _extract_year_range(query) if not quoted_terms else (None, None)
+
+        if _structured_only:
+            # Structured-only path: rows already fetched by _search_track_pairs.
+            # Skip to post-filter / formatting block.
+            if not rows:
+                return ""
+            year_note = ""
+            labels_found: set[str] = set()
+            count_note = f" (всего найдено: {len(rows)})"
+            lines = [f"[ТРЕКИ ИЗ БАЗЫ SYNC LAB{count_note}:"]
+            detailed = True
+            for r in rows:
+                a = r.get("artist") or "?"
+                t = r.get("title") or "?"
+                lbl = r.get("label") or ""
+                y_raw = r.get("release_date") or ""
+                ym = re.search(r"\b((?:19|20)\d{2})\b", str(y_raw))
+                yshow = ym.group(1) if ym else ""
+                ma = r.get("music_author") or ""
+                la = r.get("lyrics_author") or ""
+                link = r.get("link") or ""
+                parts = [f"• «{t}» — {a}"]
+                if lbl:
+                    parts.append(f"Лейбл: {lbl}")
+                    labels_found.add(lbl)
+                if yshow: parts.append(f"Год: {yshow}")
+                if ma: parts.append(f"Автор музыки: {ma}")
+                if la: parts.append(f"Автор слов: {la}")
+                if link: parts.append(f"Link: {link}")
+                lines.append(" | ".join(parts))
+            lines.append("]")
+            tracks_block = "\n".join(lines)
+            # Fetch label contacts (reuse existing contact lookup if labels found)
+            contacts_block = ""
+            if labels_found:
+                try:
+                    label_conds = ",".join(
+                        f"owner_type.ilike.*{lbl.replace('(','').replace(')','').replace(',','')[:40]}*"
+                        for lbl in list(labels_found)[:6]
+                    )
+                    cresp = httpx.get(
+                        f"{base}/rest/v1/contacts",
+                        headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                        params={"or": f"({label_conds})", "limit": "15"},
+                        timeout=10,
+                    )
+                    if cresp.is_success and cresp.json():
+                        cs = ["[КОНТАКТЫ ПРАВООБЛАДАТЕЛЕЙ (лейблы из найденных треков):"]
+                        for c in cresp.json():
+                            cs.append(f"• {c.get('owner_type','')}: {c.get('email','')} | {c.get('phone','')}")
+                        cs.append("]")
+                        contacts_block = "\n".join(cs)
+                except Exception:
+                    pass
+            return tracks_block + ("\n\n" + contacts_block if contacts_block else "")
 
         # Strip pure 4-digit year tokens from text search terms — handled via release_date filter
         non_year_terms = [t for t in clean_terms if not re.match(r'^\d{4}$', t)]
