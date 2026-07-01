@@ -327,7 +327,10 @@ def parse_export_query(text: str) -> dict:
     # allow extraction even with year present — those are clearly an artist/label name.
     _year_found = bool(filters.get("year_from"))
     _text_long = len(text.split()) >= 3  # skip fallback when year found + 3+ words remain
-    if not filters.get("artist") and not filters.get("label") and not filters.get("genre") and not (_year_found and _text_long):
+    # Also guard on title: 'песня "зима" 2000-2005' set title="зима"; without this
+    # guard the fallback also assigns artist="зима", turning the query into
+    # AND(title=зима, artist=зима) which matches nothing.
+    if not filters.get("artist") and not filters.get("label") and not filters.get("genre") and not filters.get("title") and not (_year_found and _text_long):
         stop = {
             "выгрузи", "выгрузим", "выгрузите", "выгружаем", "выгружаете", "выгружать",
             "выгрузка", "выгрузку", "выгружай", "выгрузить",

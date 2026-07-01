@@ -363,6 +363,19 @@ _TRACK_SEARCH_NOISE = _SEARCH_STOP_WORDS | {
     "год", "года", "году", "годов", "годом", "годах", "лет",
     # command words for search/selection (like "покажи", "выведи")
     "выбери", "найди", "поищи", "подбери", "отбери",
+    # author/composer meta-words — Rico users often paste "автор музыки: X, слова: Y"
+    # blocks. The names get searched, the meta-labels shouldn't.
+    "автор", "авторы", "автора", "автору", "авторами", "авторов",
+    "композитор", "композитора", "композитору", "композиторы", "композиторов",
+    "текст", "текста", "тексту", "текстом", "тексты",
+    "слова", "слов", "слову", "словом",
+    # ensemble/band-format meta-words (советские ВИА)
+    "ансамбль", "ансамбля", "ансамблю", "ансамблем", "ансамбле",
+    "вокально-инструментальный", "инструментальный", "виа",
+    # variant/performance meta-words
+    "варианты", "вариант", "варианта", "вариантов",
+    "исполнений", "исполнения", "исполнителей", "исполнение",
+    "версии", "версий", "версия", "версию",
 }
 
 _RU_VOWELS = set("аеёиоуыэюя")
@@ -557,6 +570,144 @@ def _title_variants(title: str) -> list[str]:
     return list(variants)
 
 
+_AUTHOR_MUSIC_RE = re.compile(
+    r'(?:музык[аиуе]|композитор|автор\s+музыки)\s*[:—–\-]\s*([^\n]{2,80})',
+    re.IGNORECASE
+)
+_AUTHOR_LYRICS_RE = re.compile(
+    r'(?:слов[аеу]|текст[аеу]?|автор\s+(?:слов|текста)|лирика)\s*[:—–\-]\s*([^\n]{2,80})',
+    re.IGNORECASE
+)
+
+
+def _extract_author_surname(raw: str) -> str | None:
+    """Pull the surname (last significant word) from an author phrase.
+
+    Handles 'В. Антонов (Добрынин)' → 'Добрынин' (parenthesised alt preferred as
+    pseudonym), 'Леонид Дербенёв' → 'Дербенёв', 'Л. Дербенёв' → 'Дербенёв'.
+    """
+    # Segment boundary: ';' or newline only. Comma stays because Russian names may
+    # contain lists like 'Дербенёв, Танич'; we still pick the last surname downstream.
+    # Split on '.\s' was too aggressive — it ate initials ('В. Антонов' → 'В.').
+    chunk = re.split(r'[;]|\n', raw)[0].strip()
+    paren = re.search(r'\(([^)]+)\)', chunk)
+    if paren:
+        candidate = paren.group(1).strip()
+    else:
+        candidate = re.sub(r'\([^)]*\)', '', chunk).strip()
+    # Split, drop initials (single letter with dot), keep tokens ≥3 letters
+    tokens = []
+    for w in candidate.split():
+        cleaned = w.strip('.,;:()[]«»"\'')
+        if len(cleaned) >= 3 and re.match(r'^[А-Яа-яЁёA-Za-z\-]+$', cleaned):
+            tokens.append(cleaned)
+    return tokens[-1] if tokens else None
+
+
+def _extract_author_names(text: str) -> tuple[str | None, str | None]:
+    """Extract (music_author_surname, lyrics_author_surname) from 'музыка: X, слова: Y' block."""
+    mus = _AUTHOR_MUSIC_RE.search(text)
+    lyr = _AUTHOR_LYRICS_RE.search(text)
+    m_name = _extract_author_surname(mus.group(1)) if mus else None
+    l_name = _extract_author_surname(lyr.group(1)) if lyr else None
+    return m_name, l_name
+
+
+def _extract_title_hint(text: str) -> str | None:
+    """Best-effort track title from a licensing-style block.
+
+    Heuristics (in order):
+    1. Text inside «...» or "..." quotes.
+    2. Text after em-dash on a line like 'Artist — Title'.
+    3. The last non-meta line above the author block (musика/слова/текст/композитор).
+    """
+    q = _extract_quoted_strings(text)
+    if q:
+        return q[0]
+    _META_TOKENS = ("музык", "слов", "текст", "композитор", "автор", "лирика",
+                     "поищи", "найди", "покажи", "варианты", "исполнен", "версии",
+                     "лицензи", "проект", "бренд", "клиент")
+    lines = [ln.strip().strip("•—–*").strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln]
+    # Line with " — " or " - " separator → title after last such dash
+    for ln in lines:
+        low = ln.lower()
+        if any(m in low for m in _META_TOKENS):
+            continue
+        m = re.search(r'\s[—–\-]\s+([^\-–—]{2,60})$', ln)
+        if m:
+            cand = m.group(1).strip('«»"\'.,()').strip()
+            if cand and not any(m in cand.lower() for m in _META_TOKENS):
+                return cand
+    # Fallback: shortest plain line without meta words (likely the bare title)
+    plain = [
+        ln for ln in lines
+        if 2 <= len(ln.split()) <= 6
+        and not any(m in ln.lower() for m in _META_TOKENS)
+        and re.match(r'^[«»"\'\w]', ln)
+    ]
+    if plain:
+        return min(plain, key=len).strip('«»"\'.,()').strip()
+    return None
+
+
+def _search_by_authors(
+    base: str,
+    key: str,
+    mus_name: str | None,
+    lyr_name: str | None,
+    title_hint: str | None = None,
+) -> list[dict]:
+    """Targeted search on music_author + lyrics_author columns.
+
+    Returns rows most relevant to explicit author blocks like 'музыка: Добрынин, слова: Дербенёв'.
+    When title_hint is provided, further narrows by title.ilike; falls back to authors-only
+    if the narrowed query returns nothing.
+    """
+    if not mus_name and not lyr_name:
+        return []
+    conditions = []
+    if mus_name:
+        conditions.append(f"music_author.ilike.*{mus_name}*")
+    if lyr_name:
+        conditions.append(f"lyrics_author.ilike.*{lyr_name}*")
+
+    def _fetch(and_extra: str | None) -> list[dict]:
+        params = {
+            "and": f"({','.join(conditions)})" if len(conditions) > 1 else conditions[0],
+            "select": "id,title,artist,album,label,lyrics_author,music_author,link,release_date",
+            "limit": "30",
+        }
+        if and_extra:
+            # Merge title condition into the AND
+            base_and = params["and"]
+            if base_and.startswith("("):
+                params["and"] = base_and[:-1] + f",{and_extra})"
+            else:
+                params["and"] = f"({base_and},{and_extra})"
+        try:
+            resp = httpx.get(
+                f"{base}/rest/v1/tracks",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                params=params,
+                timeout=10,
+            )
+            if resp.is_success:
+                return resp.json()
+        except Exception as e:
+            logger.warning(f"Author search fetch error: {e}")
+        return []
+
+    rows: list[dict] = []
+    if title_hint:
+        t_clean = title_hint.strip().replace("*", "").replace(",", " ").replace(".", " ").strip()
+        if t_clean:
+            rows = _fetch(f"title.ilike.*{t_clean}*")
+    if not rows:
+        rows = _fetch(None)
+    return rows
+
+
 def _search_track_pairs(base: str, key: str, pairs: list[tuple[str, str]]) -> list[dict]:
     """For each (artist, title) pair, run a targeted ilike search and aggregate rows."""
     out_by_id = {}
@@ -600,6 +751,63 @@ def _search_track_pairs(base: str, key: str, pairs: list[tuple[str, str]]) -> li
     return list(out_by_id.values())
 
 
+def _format_track_rows(base: str, key: str, rows: list[dict], header_suffix: str = "") -> str:
+    """Format a list of track rows into the '[ТРЕКИ ИЗ БАЗЫ SYNC LAB ...]' block
+    with detailed fields and follow-up label-contacts lookup.
+
+    Extracted so the author-priority path can share the structured_only formatting.
+    """
+    if not rows:
+        return ""
+    labels_found: set[str] = set()
+    count_note = f" (всего найдено: {len(rows)})"
+    lines = [f"[ТРЕКИ ИЗ БАЗЫ SYNC LAB{count_note}{header_suffix}:"]
+    for r in rows:
+        a = r.get("artist") or "?"
+        t = r.get("title") or "?"
+        lbl = r.get("label") or ""
+        y_raw = r.get("release_date") or ""
+        ym = re.search(r"\b((?:19|20)\d{2})\b", str(y_raw))
+        yshow = ym.group(1) if ym else ""
+        ma = r.get("music_author") or ""
+        la = r.get("lyrics_author") or ""
+        link = r.get("link") or ""
+        parts = [f"• «{t}» — {a}"]
+        if lbl:
+            parts.append(f"Лейбл: {lbl}")
+            labels_found.add(lbl)
+        if yshow: parts.append(f"Год: {yshow}")
+        if ma: parts.append(f"Автор музыки: {ma}")
+        if la: parts.append(f"Автор слов: {la}")
+        if link: parts.append(f"Link: {link}")
+        lines.append(" | ".join(parts))
+    lines.append("]")
+    tracks_block = "\n".join(lines)
+
+    contacts_block = ""
+    if labels_found:
+        try:
+            label_conds = ",".join(
+                f"owner_type.ilike.*{lbl.replace('(','').replace(')','').replace(',','')[:40]}*"
+                for lbl in list(labels_found)[:6]
+            )
+            cresp = httpx.get(
+                f"{base}/rest/v1/contacts",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                params={"or": f"({label_conds})", "limit": "15"},
+                timeout=10,
+            )
+            if cresp.is_success and cresp.json():
+                cs = ["[КОНТАКТЫ ПРАВООБЛАДАТЕЛЕЙ (лейблы из найденных треков):"]
+                for c in cresp.json():
+                    cs.append(f"• {c.get('owner_type','')}: {c.get('email','')} | {c.get('phone','')}")
+                cs.append("]")
+                contacts_block = "\n".join(cs)
+        except Exception:
+            pass
+    return tracks_block + ("\n\n" + contacts_block if contacts_block else "")
+
+
 def search_supabase_tracks(query: str) -> str:
     """Search tracks table by title/artist → extract label → look up label contacts.
     Returns combined track info + rights holder contacts or ''."""
@@ -608,6 +816,25 @@ def search_supabase_tracks(query: str) -> str:
     if not base or not key:
         return ""
     try:
+        # Priority -1: explicit author block. When query contains 'музыка: X, слова: Y'
+        # (typical licensing paste for old records), a targeted AND search on
+        # music_author + lyrics_author beats noisy word-based OR that drowns the
+        # real track in ансамбль/слова false matches.
+        mus_name, lyr_name = _extract_author_names(query)
+        title_hint = _extract_title_hint(query) if (mus_name or lyr_name) else None
+        author_rows: list[dict] = []
+        if mus_name or lyr_name:
+            logger.info(f"Author extract: music={mus_name!r} lyrics={lyr_name!r} title_hint={title_hint!r}")
+            author_rows = _search_by_authors(base, key, mus_name, lyr_name, title_hint)
+            if author_rows:
+                logger.info(f"Author search hit {len(author_rows)} rows")
+
+        # Author-priority short-circuit: authors are a strong signal that beats word noise.
+        # Skip further branches, format immediately, so the licensing block wins over
+        # generic OR-noise from "ансамбль/слова/текст".
+        if author_rows:
+            return _format_track_rows(base, key, author_rows, header_suffix="")
+
         # Priority 0: structured "Artist - Title" lines (e.g. multi-track license request).
         # When detected, search each pair independently — bypass noisy word extraction
         # that drowns real names in conversational filler.
@@ -757,9 +984,13 @@ def search_supabase_tracks(query: str) -> str:
 
             # Per-term fallback. Label column only for non-quoted terms (quoted = explicit track
             # title, not label name — avoids «Мелодия» flooding with Фирма Мелодия tracks).
+            # music_author/lyrics_author included so composer/lyricist names (Добрынин, Дербенёв)
+            # match the right column even when track title/artist doesn't appear in the query.
             search_label = not bool(quoted_terms)
             for t in text_terms:
-                cols = ("title", "artist", "album", "label") if search_label else ("title", "artist", "album")
+                cols = ["title", "artist", "album", "music_author", "lyrics_author"]
+                if search_label:
+                    cols.append("label")
                 for col in cols:
                     conditions.append(f"{col}.ilike.*{t}*")
                 # Transliterated variants for Russian terms referencing Latin-stored artists
@@ -2265,6 +2496,14 @@ def _kowalski_detect_intent(text: str) -> str | None:
     if re.search(r'\b(закончил|завершил|уже\s+закончил|ты\s+закончил|готово)\b', lower) and \
        any(w in lower for w in ("обогащени", "обогат", "обогащ", "enrich")):
         return None
+    # Lyrics enrichment (LRCLib + Claude) — distinct from generic enrich
+    if any(w in lower for w in (
+        "обогати тексты", "обогащение текстов", "тексты песен",
+        "извлеки метаданные из текстов", "lyrics enrich", "lyrics_enrich",
+        "проанализируй тексты", "разметь тексты",
+        "теги по текстам", "теги текстов", "проставь теги",
+    )):
+        return "enrich_lyrics"
     if any(w in lower for w in (
         "обнови базу", "обогати треки", "обогати базу", "заполни пустые", "пустые треки",
         "обработай треки", "треки без данных", "запусти обогащение", "обновить базу",
@@ -2419,26 +2658,50 @@ def _kowalski_resolve_export_query(text: str, chat_id: int) -> str:
     cached = _LAST_CATALOG_ENTITY.get(chat_id)
     if cached:
         if isinstance(cached, dict) and _export_filters_are_clean(cached):
-            # Reconstruct a clean minimal query from the stored filters
+            # Reconstruct a query string that carries ALL cached filters through
+            # parse_export_query round-trip. Prior version returned only the first
+            # non-empty field, dropping companion filters like title/genre/label.
+            parts: list[str] = []
+            title = cached.get("title")
+            if title:
+                parts.append(f'песня "{title}"')
             artist = cached.get("artist")
             if artist:
-                logger.info(f"Export subject from _LAST_CATALOG_ENTITY dict: {artist!r}")
-                return artist
+                parts.append(artist)
             label = cached.get("label")
             if label:
-                return f"лейбл {label}"
+                parts.append(f'лейбл "{label}"')
+            genre = cached.get("genre")
+            if genre:
+                parts.append(f"жанр {genre}")
+            music_authors = cached.get("music_authors") or []
+            if music_authors:
+                if len(music_authors) >= 2:
+                    parts.append(f"автора {music_authors[0]} и {music_authors[1]}")
+                else:
+                    parts.append(f"автор {music_authors[0]}")
             year_from = cached.get("year_from")
             if year_from:
                 year_to = cached.get("year_to", year_from)
                 if year_to and year_to != year_from:
-                    return f"{year_from}-{year_to}"
-                return str(year_from)
+                    parts.append(f"{year_from}-{year_to}")
+                else:
+                    parts.append(str(year_from))
             date_added = cached.get("date_added")
-            if date_added:
-                return date_added  # ISO YYYY-MM-DD, re-parsed by parse_export_query
+            if date_added and not year_from:
+                parts.append(date_added)
             release_day = cached.get("release_day")
             if release_day:
-                return f"релиз {release_day}"
+                parts.append(f"релиз {release_day}")
+            language = cached.get("language")
+            if language == "ru":
+                parts.append("только русские")
+            elif language == "foreign":
+                parts.append("только иностранные")
+            if parts:
+                reconstructed = " ".join(parts)
+                logger.info(f"Export subject from _LAST_CATALOG_ENTITY dict: {reconstructed!r}")
+                return reconstructed
         elif isinstance(cached, str):
             cached_filters = parse_export_query(cached)
             if _export_filters_are_clean(cached_filters):
@@ -2842,6 +3105,53 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             await thinking.delete()
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка: {e}")
+
+    elif intent == "enrich_lyrics":
+        # Lyrics enrichment: LRCLib lyrics → Claude metadata → tracks.lyrics_* columns
+        import re as _re_le
+        # Optional batch size override: "обогати тексты 50" / "200 треков"
+        _m_n = _re_le.search(r"\b(\d{1,4})\b", text)
+        batch_size = int(_m_n.group(1)) if _m_n else 100
+        batch_size = max(1, min(batch_size, 500))
+        await thinking.edit_text(f"📝 Ковальски: запускаю обогащение текстами\nLRCLib → Claude → метаданные\nПартия: {batch_size} треков")
+
+        from syncoteca.tools.lyrics_enricher import enrich_batch
+        loop = asyncio.get_event_loop()
+
+        last_update = 0
+        async def _async_progress(i, total, stats):
+            nonlocal last_update
+            now = time.time()
+            if now - last_update < 4 and i < total:
+                return
+            last_update = now
+            try:
+                await thinking.edit_text(
+                    f"📝 Ковальски: [{i}/{total}]\n"
+                    f"  ✅ обогащено: {stats['enriched']}\n"
+                    f"  📭 без текстов LRCLib: {stats['no_lyrics']}\n"
+                    f"  ⚠️ ошибки Claude: {stats['claude_err']}"
+                )
+            except Exception:
+                pass
+
+        def _sync_progress(i, total, stats):
+            asyncio.run_coroutine_threadsafe(_async_progress(i, total, stats), loop)
+
+        try:
+            stats = await loop.run_in_executor(
+                None, lambda: enrich_batch(limit=batch_size, only_modern=True, progress_cb=_sync_progress)
+            )
+            await thinking.edit_text(
+                f"✅ Ковальски: обогащение текстами завершено\n\n"
+                f"📊 Обработано: {stats['processed']}\n"
+                f"  ✅ обогащено: {stats['enriched']}\n"
+                f"  📭 без текстов LRCLib: {stats['no_lyrics']}\n"
+                f"  ⚠️ ошибки Claude: {stats['claude_err']}"
+            )
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ошибка обогащения текстами: {e}")
+        return
 
     elif intent == "enrich":
         import re as _re
