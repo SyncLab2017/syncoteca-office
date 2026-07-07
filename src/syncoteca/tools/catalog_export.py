@@ -218,14 +218,32 @@ def parse_export_query(text: str) -> dict:
     # Quoted name: «Руки Вверх» / "Аквариум". By default = artist.
     # But if preceded by song-context word (песня/трек/композиция) → it's a track title.
     if not filters.get("artist") and not filters.get("title"):
+        all_quoted = re.findall(r'[«"]([\w\s.\-!?]+?)[»"]', text)
         m = re.search(r'[«"]([\w\s.\-!?]+?)[»"]', text)
         if m:
             candidate = m.group(1).strip()
             cand_words = candidate.split()
             if 1 <= len(cand_words) <= 5:
-                # Look ~30 chars before the quote for a song context word.
-                preceding = text[max(0, m.start() - 30):m.start()].lower()
-                if re.search(r"\b(?:песн[яюеи]|трек[еау]?|композици[яюие]|сингл[ауе]?)", preceding):
+                # Look ~40 chars before the quote for a title-context word.
+                # Includes song-nouns (песня/трек) AND lexical framings ('слово ...',
+                # 'название ...', 'содержат ...') so 'содержали слово "Половина"' → title, not artist.
+                preceding = text[max(0, m.start() - 40):m.start()].lower()
+                is_title_ctx = bool(re.search(
+                    r"\b(?:песн[яюеи]|трек[еау]?|композици[яюие]|сингл[ауе]?"
+                    r"|слов[оуае]?|названи[еюия]|заголов[коке]|содерж[ауие]|включа[юет])",
+                    preceding,
+                ))
+                # Multiple quoted terms → likely enumerated title variants
+                # ('слово "Половина" или "Половинка"'). Use longest common lowercase
+                # prefix as the title stem so an ilike-substring search covers both.
+                if is_title_ctx and len(all_quoted) >= 2:
+                    stems = [s.strip().lower() for s in all_quoted if s.strip()]
+                    prefix = os.path.commonprefix(stems)
+                    if len(prefix) >= 3:
+                        filters["title"] = prefix
+                    else:
+                        filters["title"] = candidate
+                elif is_title_ctx:
                     filters["title"] = candidate
                 else:
                     filters["artist"] = candidate
