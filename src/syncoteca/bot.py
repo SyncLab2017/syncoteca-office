@@ -3430,6 +3430,8 @@ async def _run_label_scrape_task(chat_id: int, bot, label_id: str, label_name: s
         f"Альбомов обработано: {result.get('albums_done', 0)} из {result.get('albums_total', 0)}.",
         f"✅ Добавлено треков: {result.get('added', 0)}",
     ]
+    if result.get("updated"):
+        lines.append(f"🔗 Обновлён label у существующих: {result['updated']}")
     if result.get("skipped"):
         lines.append(f"⏭ Пропущено (уже есть): {result['skipped']}")
     if result.get("albums_skipped"):

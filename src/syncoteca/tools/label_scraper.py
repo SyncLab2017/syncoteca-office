@@ -170,15 +170,45 @@ def get_processed_album_ids(label_id: str) -> set:
 
 
 def _insert_track(row: dict) -> str:
-    """Insert one track into tracks table. Returns 'added', 'skipped', or 'error'.
-    Uses link (yandex URL) as unique key — duplicates are ignored silently."""
+    """Insert one track into tracks table. Returns 'added', 'updated', 'skipped', or 'error'.
+    Uses link (yandex URL) as unique key. On duplicate — if existing row has label IS NULL
+    and new row has label, PATCH just the label (preserves manual edits on other fields)."""
     headers = {**_sb_headers(), "Prefer": "resolution=ignore-duplicates,return=minimal"}
     r = httpx.post(f"{_sb_base()}/rest/v1/tracks", headers=headers, json=row, timeout=10)
-    if r.status_code == 409:
-        return "skipped"
-    if r.is_success:
+    if r.is_success and r.status_code in (200, 201):
         return "added"
-    # Log unexpected errors
+    if r.status_code == 409 or (r.is_success and r.status_code == 200 and not r.text):
+        # duplicate: check if we can fill missing label
+        new_label = row.get("label")
+        link = row.get("link")
+        if not new_label or not link:
+            return "skipped"
+        try:
+            g = httpx.get(
+                f"{_sb_base()}/rest/v1/tracks",
+                headers=_sb_headers(),
+                params={"link": f"eq.{link}", "select": "id,label"},
+                timeout=10,
+            )
+            existing = g.json() if g.is_success else []
+            if not existing:
+                return "skipped"
+            existing_label = existing[0].get("label")
+            if existing_label:
+                return "skipped"
+            row_id = existing[0]["id"]
+            p = httpx.patch(
+                f"{_sb_base()}/rest/v1/tracks",
+                headers={**_sb_headers(), "Prefer": "return=minimal"},
+                params={"id": f"eq.{row_id}"},
+                json={"label": new_label},
+                timeout=10,
+            )
+            if p.is_success:
+                return "updated"
+            return "error"
+        except Exception:
+            return "error"
     return "error"
 
 
@@ -238,7 +268,7 @@ def scrape_label(
         to_process = [aid for aid in all_ids if aid not in processed]
 
         label_name = None
-        added = skipped = errors = albums_skipped = 0
+        added = updated = skipped = errors = albums_skipped = 0
         ai = -1
 
         cancelled = False
@@ -298,6 +328,8 @@ def scrape_label(
                 res = _insert_track(row)
                 if res == "added":
                     added += 1
+                elif res == "updated":
+                    updated += 1
                 elif res == "skipped":
                     skipped += 1
                 else:
@@ -323,6 +355,7 @@ def scrape_label(
         return {
             "label_name": label_name,
             "added": added,
+            "updated": updated,
             "skipped": skipped,
             "errors": errors,
             "albums_total": len(all_ids),
