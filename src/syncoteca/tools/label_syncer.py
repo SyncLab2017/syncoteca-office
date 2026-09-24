@@ -14,7 +14,7 @@ from typing import Callable, Optional
 
 import httpx
 
-ZENROWS_KEY = os.getenv("ZENROWS_KEY", "ed22055fcc6e65f4ebb401a7fdb3243c11592594")
+ZENROWS_KEY = os.getenv("ZENROWS_KEY", "6ff4aa38190297fb3c60b19dd7fe0817779b68a1")
 DELAY_S = 10.0
 PAGE_SIZE = 1000
 
