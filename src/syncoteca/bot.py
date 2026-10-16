@@ -2401,6 +2401,9 @@ def _format_catalog_stats(stats: dict) -> str:
 def _kowalski_detect_intent(text: str) -> str | None:
     """Detect catalog tool intent from natural language. Returns tool name or None."""
     lower = text.lower()
+    # Yandex URL parse: "ковальски, парси <url>" / "ковальски глянь ссылку" + music.yandex.ru link
+    if re.search(r"music\.yandex\.(?:ru|com)/(?:album|track|artist)/\d+", lower):
+        return "parse_yandex_url"
     # Export of recently date-fixed tracks (must be before generic export check)
     if any(w in lower for w in ("обновленн", "обновлённ")) and any(w in lower for w in (
         "выгрузи", "выгрузим", "дай", "скинь", "покажи", "пришли", "excel", "треки", "список"
@@ -3105,6 +3108,33 @@ async def _run_kowalski_tool(update: Update, intent: str, text: str) -> None:
             await thinking.delete()
         except Exception as e:
             await thinking.edit_text(f"❌ Ошибка: {e}")
+
+    elif intent == "parse_yandex_url":
+        # Pure URL parse (track/album/artist) — показать Денису результат, в БД не писать.
+        m = re.search(r"https?://music\.yandex\.(?:ru|com)/\S+", text)
+        if not m:
+            await update.message.reply_text("❌ Ковальски: не нашёл URL Yandex.Music в сообщении")
+            return
+        url = m.group(0).rstrip(").,;")
+        thinking = await update.message.reply_text(f"🗃️ Ковальски: парсю ссылку…\n🔗 {url}")
+        try:
+            from syncoteca.tools.yandex_url_parser import parse_yandex_url, format_result_for_tg
+            data = await loop.run_in_executor(None, parse_yandex_url, url)
+            reply = format_result_for_tg(data)
+            # Telegram HTML limit 4096 chars — split if needed
+            if len(reply) <= 4000:
+                await thinking.edit_text(reply, parse_mode="HTML", disable_web_page_preview=True)
+            else:
+                await thinking.delete()
+                for chunk_start in range(0, len(reply), 3900):
+                    await update.message.reply_text(
+                        reply[chunk_start:chunk_start + 3900],
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+        except Exception as e:
+            await thinking.edit_text(f"❌ Ковальски: ошибка парсинга\n{e}")
+        return
 
     elif intent == "enrich_lyrics":
         # Lyrics enrichment: LRCLib lyrics → Claude metadata → tracks.lyrics_* columns
